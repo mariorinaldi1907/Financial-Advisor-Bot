@@ -14,9 +14,6 @@ import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 
-# -----------------------------
-# Page / Theme
-# -----------------------------
 st.set_page_config(page_title="Financial Advisor Bot", page_icon="📈", layout="wide")
 
 st.markdown(
@@ -78,9 +75,7 @@ st.markdown(
 )
 st.write("")
 
-# -----------------------------
-# Load Model + Data
-# -----------------------------
+
 MODEL_PATH = os.path.join("models", "rf_model_spy.pkl")
 DATA_PATH = os.path.join("data", "spy_processed.csv")
 
@@ -103,9 +98,6 @@ if not os.path.exists(DATA_PATH):
 model = load_model()
 df = load_data()
 
-# -----------------------------
-# Expected Columns / Features
-# -----------------------------
 feature_cols = [
     "SMA_10", "SMA_30", "SMA_50", "SMA_100",
     "EMA_12", "EMA_26",
@@ -134,9 +126,6 @@ df = df.sort_index()
 
 available_dates = df.index
 
-# -----------------------------
-# Sidebar Inputs (Cleaner Date UI)
-# -----------------------------
 st.sidebar.header("User Inputs")
 
 investment_amount = st.sidebar.slider(
@@ -168,15 +157,12 @@ st.sidebar.markdown("<div class='small-note'>Tip: For report screenshots, captur
 picked_ts = pd.Timestamp(picked_date)
 
 # Snap to nearest available trading date if weekend/holiday
-# (choose closest by absolute time difference)
 nearest_idx = int(np.argmin(np.abs((available_dates - picked_ts).to_numpy())))
 selected_date = available_dates[nearest_idx]
 
 run = st.sidebar.button("Get Recommendation")
 
-# -----------------------------
-# Helper: Explanation Generator
-# -----------------------------
+
 def build_explanations(row: pd.Series):
     reasons = []
 
@@ -209,14 +195,8 @@ def build_explanations(row: pd.Series):
 
     return reasons
 
-# -----------------------------
-# Layout
-# -----------------------------
 left, right = st.columns([1.25, 1.0], gap="large")
 
-# -----------------------------
-# Chart (Left)
-# -----------------------------
 with left:
     st.subheader("📉 Market Visualisation")
 
@@ -256,9 +236,6 @@ with left:
 
     st.caption(f"Selected trading date used by the model: {selected_date.date()}")
 
-# -----------------------------
-# Prediction & Advice (Right)
-# -----------------------------
 with right:
     st.subheader("📊 Prediction & Advice")
 
