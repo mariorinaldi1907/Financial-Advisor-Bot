@@ -1,166 +1,141 @@
-"""SPY research dashboard. Run: python -m streamlit run app.py."""
+"""Multi-asset forecasting research dashboard. Run: python -m streamlit run app.py."""
+import json
 from pathlib import Path
-import hashlib
-
-import joblib
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from src.data import MARKET_PATH, feature_frame, snapshot_digest
+from src.context import ASSETS, input_hashes
 
 ROOT = Path(__file__).resolve().parent
-st.set_page_config(page_title='Financial Advisor Bot', page_icon='📈', layout='wide')
-st.title('📈 Financial Advisor Bot')
-st.caption('Multi-ETF · 10 trading day direction · educational research prototype')
-ASSET_NAMES = {'SPY': 'US large-cap stocks', 'QQQ': 'Nasdaq 100', 'IWM': 'US small-cap stocks', 'VEU': 'International stocks', 'AGG': 'US aggregate bonds', 'TLT': 'Long-duration US Treasuries', 'GLD': 'Gold'}
-assets = [t for t in ASSET_NAMES if (ROOT / 'models' / f'{t.lower()}_forecast.joblib').exists()]
-if not assets:
-    st.error('Train the ETF models first: python -m src.universe')
+st.set_page_config(page_title='Market Research', page_icon='📈', layout='wide')
+st.title('📈 Market forecasting research')
+st.caption('22 ETFs · market and interest-rate context · calibrated probabilities · return ranges')
+report_path, predictions_path = ROOT / 'data/research_results.json', ROOT / 'data/research_predictions.csv'
+if not report_path.exists() or not predictions_path.exists():
+    st.error('Train the research models first: python -m src.research')
     st.stop()
-ticker = st.sidebar.selectbox('ETF', assets, format_func=lambda t: f'{t} — {ASSET_NAMES[t]}')
-st.subheader(f'{ticker} · {ASSET_NAMES[ticker]}')
-
-
-@st.cache_resource
-def load_bundle(path, modified):
-    return joblib.load(path)
 
 
 @st.cache_data
-def load_csv(path, modified):
-    return pd.read_csv(path, index_col=0, parse_dates=True)
+def load_report(path, modified):
+    return json.loads(Path(path).read_text())
 
 
 @st.cache_data
-def load_features(path, modified, ticker):
-    return feature_frame(ticker, path).dropna()
+def load_predictions(path, modified):
+    return pd.read_csv(path, parse_dates=['Date', 'Label_end'])
 
 
-paths = {'model': ROOT / 'models' / f'{ticker.lower()}_forecast.joblib',
-         'market': MARKET_PATH,
-         'predictions': ROOT / 'data' / f'{ticker.lower()}_predictions.csv'}
-if any(not p.exists() for p in paths.values()):
-    st.error('Training artifacts are missing. Run: python -m src.universe')
+report = load_report(str(report_path), report_path.stat().st_mtime_ns)
+if report['input_hashes'] != input_hashes():
+    st.error('The market or environment snapshot changed after training. Retrain before using these results.')
     st.stop()
-try:
-    bundle = load_bundle(str(paths['model']), paths['model'].stat().st_mtime_ns)
-    data = load_features(str(paths['market']), paths['market'].stat().st_mtime_ns, ticker)
-    historical = load_csv(str(paths['predictions']), paths['predictions'].stat().st_mtime_ns)
-    model, meta = bundle['model'], bundle['metadata']
-    if snapshot_digest() != meta['snapshot_sha256']:
-        raise ValueError('Market data changed after training. Run: python -m src.universe')
-    if str(data.index.max().date()) != meta['raw_end']:
-        raise ValueError('Model and feature snapshot dates disagree. Retrain all artifacts together.')
-    if data[meta['features']].isna().any().any():
-        raise ValueError('Feature snapshot contains missing model inputs.')
-except Exception as exc:
-    st.error(f'Could not load matching training artifacts: {exc}')
+ticker = st.sidebar.selectbox('ETF', list(ASSETS), format_func=lambda t: f'{t} — {ASSETS[t][0]}')
+horizons = sorted(int(h) for h in report['horizons'])
+horizon = st.sidebar.selectbox('Forecast horizon', horizons, index=horizons.index(10) if 10 in horizons else 0,
+                               format_func=lambda h: f'{h} trading session{ "s" if h != 1 else ""}')
+mode = st.sidebar.radio('View', ['Latest forecast', 'Historical evaluation'])
+result = report['horizons'][str(horizon)]
+metrics = result['metrics'][ticker]
+all_predictions = load_predictions(str(predictions_path), predictions_path.stat().st_mtime_ns)
+history = all_predictions.loc[(all_predictions.Ticker == ticker) & (all_predictions.horizon == horizon)].sort_values('Date')
+if history.empty:
+    st.error('This horizon has no saved evaluation predictions. Finish its training run.')
     st.stop()
-
-age = (pd.Timestamp.now(tz='America/New_York').tz_localize(None).normalize() - data.index.max()).days
-st.caption(f"Data: {meta['raw_start']} to {meta['raw_end']} · Selected model: {meta['selected_model']} · {meta['raw_rows']:,} market sessions")
-if age > 7:
-    st.warning(f'This snapshot is {age} calendar days old. Refresh data and retrain before interpreting it as a current forecast.')
-
-selected_scores = meta['holdout'][meta['selected_model']]
-a, b, c = st.columns(3)
-a.metric('Held-out direction accuracy', f"{selected_scores['accuracy']:.1%}")
-b.metric('Held-out balanced accuracy', f"{selected_scores['balanced_accuracy']:.1%}")
-c.metric('Always-UP baseline accuracy', f"{meta['always_up_holdout']['accuracy']:.1%}")
-st.caption(f"Evaluation: {meta['holdout_start']} to {meta['holdout_end']}. Models are selected on earlier validation folds, never on these accuracy figures.")
-st.sidebar.header('Explore forecasts')
-mode = st.sidebar.radio('View', ['Latest forecast', 'Historical holdout'])
-if mode == 'Historical holdout':
-    picked = st.sidebar.date_input('As-of date', value=historical.index.max().date(),
-                                   min_value=historical.index.min().date(), max_value=historical.index.max().date())
-    # Use only a session at or before the chosen date, never a future Monday.
-    selected = historical.index[historical.index <= pd.Timestamp(picked)][-1]
-    p_up = float(historical.loc[selected, f"{meta['selected_model']}_p_up"])
-    st.info(f"Historical evaluation: predictions were saved from a model whose training labels ended on {meta['development_label_end']}. It was not fitted on this holdout.")
+latest = next(row for row in result['latest'] if row['ticker'] == ticker)
+st.subheader(f'{ticker} · {ASSETS[ticker][0]} · {horizon}-session horizon')
+a,b,c,d = st.columns(4)
+a.metric('Evaluation accuracy', f"{metrics['accuracy']:.1%}")
+b.metric('Balanced accuracy', f"{metrics['balanced_accuracy']:.1%}")
+c.metric('Prior baseline accuracy', f"{metrics['baseline_accuracy']:.1%}")
+d.metric('Probability log loss', f"{metrics['log_loss']:.3f}")
+st.caption(f"Evaluation: {result['test_start']} to {result['test_end']}. Selected using 2018–2023 validation: {result['selected_model']}.")
+st.info('These are retrospective research results. Earlier experiments inspected overlapping dates. Daily outcomes and asset returns are correlated; they do not establish a new, independent trading advantage.')
+if mode == 'Historical evaluation':
+    picked = st.sidebar.date_input('As-of date', value=history.Date.max().date(),
+        min_value=history.Date.min().date(), max_value=history.Date.max().date())
+    forecast = history.loc[history.Date <= pd.Timestamp(picked)].iloc[-1]
+    as_of, p_up = forecast.Date.date(), float(forecast.p_up)
+    expected, low, median, high = [float(forecast[c]) for c in ['expected_return','lower_return','median_return','upper_return']]
+    st.caption(f"Model fitting and calibration outcomes ended before {forecast.training_label_end}; prediction as of {as_of}.")
 else:
-    selected = data.index.max()
-    row_input = data.loc[[selected], meta['features']]
-    p_up = float(model.predict_proba(row_input)[0, list(model.classes_).index(1)])
-    st.info(f"Latest snapshot forecast: the deployed model was refitted using outcomes known through {meta['live_label_end']}. This refitted model is used only for the latest session.")
+    forecast = latest
+    as_of, p_up = pd.Timestamp(latest['as_of']).date(), latest['p_up']
+    expected, low, median, high = [latest[c] for c in ['expected_return','lower_return','median_return','upper_return']]
+    st.caption(f"Latest snapshot: {as_of}. Fitting/calibration used only outcomes known through {result['live_trace']['calibration_label_end']}.")
+    age = (pd.Timestamp.now(tz='America/New_York').date() - as_of).days
+    if age > 7:
+        st.warning(f'The saved forecast is {age} calendar days old. Refresh and retrain for a current snapshot.')
 
-row = data.loc[selected]
-left, right = st.columns([1.5, 1])
+left,right = st.columns([1.4,1])
 with left:
-    st.subheader('Market history')
-    recent = data.loc[:selected].tail(180)
-    fig = go.Figure()
-    for col, label in [('Close', 'Adjusted close'), ('SMA_30', 'SMA 30'), ('SMA_100', 'SMA 100')]:
-        fig.add_trace(go.Scatter(x=recent.index, y=recent[col], name=label))
-    fig.update_layout(height=420, margin=dict(l=10, r=10, t=15, b=10),
-                      yaxis_title='Adjusted USD', legend=dict(orientation='h'))
-    st.plotly_chart(fig, width='stretch')
-    st.caption(f'As of market close on {selected.date()}. Features include that session’s closing price and volume; this is not an intraday forecast.')
+    st.subheader('Price history')
+    market = pd.read_csv(ROOT / 'data/market_prices.csv', parse_dates=['Date'])
+    series = market.loc[(market.Ticker == ticker) & (market.Date <= pd.Timestamp(as_of))].tail(180)
+    chart = go.Figure(go.Scatter(x=series.Date, y=series.Close, name='Adjusted close'))
+    chart.update_layout(height=340, margin=dict(l=5,r=5,t=15,b=5), yaxis_title='Adjusted USD')
+    st.plotly_chart(chart, width='stretch')
 with right:
-    st.subheader('Direction estimate')
-    a, b = st.columns(2)
-    a.metric('P(UP)', f'{p_up:.1%}')
-    b.metric('P(DOWN / flat)', f'{1-p_up:.1%}')
-    if meta['selected_model'] == 'prior_baseline':
-        st.warning('No validated timing signal. The selected baseline reports the training-period frequency of UP outcomes and does not use indicators to time the market.')
-    elif abs(p_up - .5) < .05:
-        st.warning('No clear directional signal: model estimate is close to 50%.')
-    else:
-        st.write(f"Estimated direction: **{'UP' if p_up >= .5 else 'DOWN / flat'}** over the next {meta['horizon']} trading sessions.")
-    st.caption('These are uncalibrated model estimates, not guaranteed odds or a measure of investment safety. The 5 percentage point neutral band is a display heuristic, not an optimized trading rule.')
-    if mode == 'Historical holdout':
-        actual = 'UP' if historical.loc[selected, 'Target'] == 1 else 'DOWN / flat'
-        st.write(f'Observed 10-session outcome: **{actual}**')
-    st.subheader('Indicator context')
-    st.write(f"• Trend: SMA 30 {'above' if row.SMA_30 > row.SMA_100 else 'at or below'} SMA 100.")
-    st.write(f'• RSI (14): {row.RSI_14:.1f}.')
-    st.write(f'• Previous 10-session return: {row.Mom_10:+.2%}.')
-    st.write(f'• Daily return volatility (20 sessions): {row.Volatility_20:.2%}.')
-    st.write(f'• Volume relative to 20-session average: {row.Relative_volume:.2f}×.')
-    st.caption('These describe market conditions. They do not establish why this specific model made its prediction.')
+    st.subheader('Forecast and uncertainty')
+    a,b = st.columns(2)
+    a.metric('Calibrated P(UP)', f'{p_up:.1%}')
+    b.metric('Expected return estimate', f'{expected:+.2%}')
+    st.write(f'**Nominal 80% return range:** {low:+.2%} to {high:+.2%}')
+    st.write(f'Median return estimate: {median:+.2%}')
+    st.caption('The return and direction models are separate. Interval adjustment uses earlier calibration dates; market dependence means 80% future coverage is not guaranteed.')
+    if result['selected_model'] == 'prior':
+        st.warning('The historical-prior baseline won validation. No learned timing signal is established for this horizon.')
+    elif abs(p_up-.5) < .1:
+        st.warning('The estimated direction is uncertain. A high probability does not establish investment suitability.')
+    if mode == 'Historical evaluation':
+        st.write(f"Observed {horizon}-session return: **{forecast.Forward_return:+.2%}**")
+        st.write(f"Observed direction: **{'UP' if forecast.Target == 1 else 'DOWN / flat'}**")
 
-with st.expander('Evaluation and model selection', expanded=False):
-    table = []
-    for name, metrics in meta['holdout'].items():
-        table.append({'Model': name, 'Validation log loss': meta['validation'][name]['mean_log_loss'],
-                      'Holdout accuracy': metrics['accuracy'], 'Holdout balanced accuracy': metrics['balanced_accuracy'],
-                      'Holdout log loss': metrics['log_loss'], 'Holdout Brier score': metrics['brier']})
-    st.dataframe(pd.DataFrame(table).set_index('Model').style.format('{:.3f}'), width='stretch')
-    st.write(f"Holdout: {meta['holdout_start']} to {meta['holdout_end']}. Always-UP accuracy: {meta['always_up_holdout']['accuracy']:.1%}.")
-    st.caption('Selection uses the lowest mean log loss across four expanding development folds, with a 10-session gap. The final 20% is held out of selection. Lower log loss and Brier score are better. Overlapping target windows mean rows are dependent; these results do not establish trading profitability.')
-    st.download_button('Download historical predictions', paths['predictions'].read_bytes(), 'holdout_predictions.csv', 'text/csv')
+with st.expander('All assets and model comparisons'):
+    rows = []
+    for asset, m in result['metrics'].items():
+        rows.append(dict(ETF=asset, Accuracy=m['accuracy'], Balanced_accuracy=m['balanced_accuracy'],
+            Baseline_accuracy=m['baseline_accuracy'], Log_loss=m['log_loss'], Baseline_log_loss=m['baseline_log_loss'],
+            Interval_coverage=m['interval_80_coverage'], Nonoverlapping_windows=m['nonoverlapping_rows']))
+    st.dataframe(pd.DataFrame(rows).set_index('ETF').style.format({c:'{:.3f}' for c in rows[0] if c not in ['ETF','Nonoverlapping_windows']}), width='stretch')
+    comparison = [{'Model':name, 'Validation log loss':value,
+                   'Evaluation log loss':result['candidates'][name]['mean_asset_log_loss']}
+                  for name,value in result['validation_log_loss'].items()]
+    st.dataframe(pd.DataFrame(comparison).set_index('Model').style.format('{:.4f}'), width='stretch')
+    bootstrap = result['bootstrap']
+    lo,hi = bootstrap['bootstrap_95_interval']
+    st.write(f"Mean log-loss difference versus prior: {bootstrap['mean_log_loss_difference']:+.4f}; exploratory date-block interval [{lo:+.4f}, {hi:+.4f}]. Negative favors the selected model.")
+    st.caption('Dates, with all assets retained together, are resampled in blocks. This interval does not correct for previous research or selection across horizons.')
 
-st.caption('Academic prototype for research and education. It does not assess your finances, determine suitable allocations, or provide personalized investment advice.')
+with st.expander('Out-of-sample stability by time period', expanded=True):
+    period_rows = []
+    for period in result['evaluation_period_metrics']:
+        values = period['models'][result['selected_model']][ticker]
+        baseline = period['models']['prior'][ticker]
+        period_rows.append({'Period':period['start'] + ' to ' + period['end'],
+            'Accuracy':values['accuracy'], 'Balanced accuracy':values['balanced_accuracy'],
+            'Log loss':values['log_loss'], 'Baseline log loss':baseline['log_loss'],
+            'Brier':values['brier'], 'ECE':values['ece'], 'Rows':values['rows']})
+    st.dataframe(pd.DataFrame(period_rows).set_index('Period').style.format({c:'{:.3f}' for c in period_rows[0] if c not in ['Period','Rows']}),width='stretch')
+    st.caption('Five-year rolling training windows, separate chronological calibration, purged target windows, and a 20-session embargo after each completed validation/evaluation period. Later fits exclude embargo observations. Stability is measured rather than assumed.')
 
-with st.expander('Accuracy across all trained ETFs'):
-    summary_path = ROOT / 'data/training_results.json'
-    if summary_path.exists():
-        import json
-        runs = json.loads(summary_path.read_text())
-        summary = pd.DataFrame([dict(ticker=t, selected_model=m['selected_model'], accuracy=m['holdout'][m['selected_model']]['accuracy'], balanced_accuracy=m['holdout'][m['selected_model']]['balanced_accuracy'], log_loss=m['holdout'][m['selected_model']]['log_loss'], baseline_log_loss=m['holdout']['prior_baseline']['log_loss'], always_up_accuracy=m['always_up_holdout']['accuracy']) for t,m in runs.items()])
-        st.dataframe(summary.set_index('ticker').style.format({c: '{:.3f}' for c in ['accuracy', 'balanced_accuracy', 'log_loss', 'baseline_log_loss', 'always_up_accuracy']}), width='stretch')
-        st.caption('Each ETF has its own chronological split and selected model. Compare with its own baseline; periods may differ slightly by listing history. Contextual candidates use other ETFs as equity, bond, gold and dollar proxies, not direct macroeconomic releases.')
+with st.expander('Calibration, return estimates, and execution study'):
+    st.write(f"Observed interval coverage: {metrics['interval_80_coverage']:.1%}; expected-return MAE: {metrics['expected_return_mae']:.2%}; zero-return MAE: {metrics['zero_return_mae']:.2%}.")
+    st.write(f"Raw probability Brier score: {metrics['raw_brier']:.4f}; calibrated: {metrics['brier']:.4f}. Lower is better.")
+    study = result['execution'].get(ticker)
+    if study:
+        rows = [{'Method':name, **study[name]} for name in ['strategy','buy_hold']]
+        st.dataframe(pd.DataFrame(rows).set_index('Method'), width='stretch')
+        st.caption(f"{study['periods']} non-overlapping holding periods; strategy invested {study['invested_fraction']:.1%} of periods. Signals require P(UP) ≥ 60% and expected return above assumed round-trip costs. Entry is next adjusted open, exit after {horizon} sessions, 5 basis points each way for each separate holding window; gaps are cash and earn zero. Drawdown is measured at holding-period endpoints, so intraperiod drawdowns are not shown. Market impact, taxes, financing, and operational slippage are not modeled. These assumptions are not live execution results.")
 
-foundation_path = ROOT / 'data/foundation_results.json'
-if foundation_path.exists():
-    import json
-    research = json.loads(foundation_path.read_text())
-    adapter_file = ROOT / 'models/chronos2_adapter.safetensors'
-    adapter_matches = not research.get('adapter_sha256') or (adapter_file.exists() and hashlib.sha256(adapter_file.read_bytes()).hexdigest() == research['adapter_sha256'])
-    if ticker in research['latest'] and research['source_hashes'].get(ticker) == meta['raw_sha256'] and research['context_sha256'] == meta['snapshot_sha256'] and adapter_matches:
-        with st.expander('Hugging Face forecasting research', expanded=True):
-            st.caption('Chronos forecasts are a separate research comparison: frozen pretrained variants plus a LoRA model trained jointly on seven ETFs and historical market context through September 2025. They do not replace the selected model above.')
-            choices = sorted(research['latest'][ticker], key=lambda n: (n != 'chronos2_finetuned_context', n))
-            choice = st.selectbox('Foundation model', choices)
-            forecast = research['latest'][ticker][choice]
-            st.write(f"Latest snapshot: {forecast['as_of']} · Approximate P(UP): {forecast['p_up']:.1%}")
-            fan = go.Figure()
-            steps = list(range(1, 11))
-            fan.add_trace(go.Scatter(x=steps, y=forecast['upper'], mode='lines', line=dict(width=0), name='90th percentile'))
-            fan.add_trace(go.Scatter(x=steps, y=forecast['lower'], fill='tonexty', mode='lines', line=dict(width=0), name='10th–90th percentile band'))
-            fan.add_trace(go.Scatter(x=steps, y=forecast['median'], name='Median forecast'))
-            fan.add_hline(y=forecast['close'], line_dash='dash')
-            fan.update_layout(xaxis_title='Trading sessions after snapshot', yaxis_title='Adjusted USD', height=340)
-            st.plotly_chart(fan, width='stretch')
-            rows = [{'Model': name, 'Windows': val['windows'], 'Accuracy': val['accuracy'], 'Balanced accuracy': val['balanced_accuracy'], 'Log loss': val['log_loss'] if name != 'always_up' else None} for name,val in research['metrics'][ticker].items()]
-            st.dataframe(pd.DataFrame(rows).set_index('Model').style.format({'Accuracy': '{:.1%}', 'Balanced accuracy': '{:.1%}', 'Log loss': '{:.3f}'}, na_rep='—'), width='stretch')
-            st.caption('Exploratory comparison from November 2025 using daily windows. Ten-session outcomes overlap and are not independent; non-overlapping scores are included in the report. Both pinned model revisions and ETF fine-tuning predate the test; probabilities and forecast bands are uncalibrated. Each as-of window is isolated, with cross-learning disabled to prevent future windows influencing earlier forecasts.')
+with st.expander('Data, methods, and forward tracking'):
+    st.write(f"Features: {report['feature_counts']['market']} market features, {report['feature_counts']['with_environment']} including the environment.")
+    st.write('Context includes backward-looking changes and rolling Z-scores of volatility and Treasury-yield indices, yield-curve changes, credit/commodity/dollar proxies, market correlations, relative strength, and mature historical outcome frequencies.')
+    st.caption('Environment observations are delayed by two market sessions and stale values are removed. Vendor snapshots are not original economic-release vintages. No historical news or fundamental-release archive is included.')
+    ledger = ROOT / 'data/forecast_ledger.csv'
+    if ledger.exists():
+        st.caption('An append-only ledger preserves the first forecasts issued for each date and horizon, including forecasts issued before later model refits. Those future outcomes can support forward evaluation as they mature; historical simulations are kept separate.')
+        st.download_button('Download issued forecasts', ledger.read_bytes(), 'forecast_ledger.csv', 'text/csv')
+    st.download_button('Download evaluation predictions', predictions_path.read_bytes(), 'research_predictions.csv', 'text/csv')
+st.caption('Research and education. Forecasts are uncertain and do not determine suitable investments or portfolio allocations.')

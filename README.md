@@ -1,14 +1,12 @@
-# Financial Advisor Bot
+# Financial Advisor Bot — Market Research
 
-A multi-ETF research system that predicts whether an ETF's adjusted closing price will be higher after **10 trading sessions**. It combines reproducible model training, market-context features, Hugging Face forecasting models, and a Streamlit dashboard.
+A reproducible forecasting system for **22 ETFs**, with **1-, 5-, 10-, and 20-session horizons**. Shared models learn from technical features, cross-asset relationships, and delayed volatility/Treasury-index context. The dashboard shows directional probabilities, expected returns, calibrated return ranges, and evaluation stability by year.
 
-**Scope:** SPY, QQQ, IWM, VEU, AGG, TLT, and GLD. UUP supplies dollar context. The saved snapshot covers 2007–20 November 2026, subject to each ETF's listing date.
+**Status:** research software. Temporal safeguards and richer models do not guarantee an investment edge. The current results do not establish consistent out-of-sample superiority over simple priors.
 
-The project reports unsuccessful experiments as well as promising ones. Higher accuracy alone does not establish a useful trading signal: a model that always predicts UP can score well when prices usually rise.
+## Run
 
-## Run the app
-
-Python 3.12+; the dashboard was tested with Python 3.14.3 and optional neural training with Python 3.13.
+Python 3.12+; tested locally with Python 3.14.
 
 ```bash
 git clone https://github.com/mariorinaldi1907/Financial-Advisor-Bot.git
@@ -19,142 +17,135 @@ python -m pip install -r requirements.txt
 python -m streamlit run app.py
 ```
 
-Windows activation: `.venv\Scripts\activate`. Open Streamlit's printed local address. The app works with the included snapshots and predictions without downloading Hugging Face weights or installing PyTorch.
+Windows activation: `.venv\Scripts\activate`. The app uses the committed snapshots and saved evaluation predictions offline. Load joblib files only from trusted sources.
 
-The dashboard lets you switch ETFs, inspect historical predictions, view the latest forecast, compare accuracy with baselines, and explore Chronos forecast bands. Historical predictions remain separate from models refitted on later data. Weekend date selections use the preceding session.
-
-## What is trained
-
-### Separate models for each ETF
-
-Each ETF is evaluated with nine candidates:
-
-- A training-prior baseline, which estimates how often the ETF's 10-session return was positive.
-- The original Random Forest configuration.
-- Regularized Random Forests using normalized indicators, with and without additional indicators.
-- Regularized logistic regression, with and without additional indicators.
-- A contextual Random Forest and two contextual logistic regressions with different regularization strengths.
-
-Technical features include price-relative moving-average gaps, normalized MACD, RSI, momentum, volatility, relative volume, Bollinger position, drawdown, ATR, and stochastic position. RSI retains the original rolling-average formulation rather than Wilder smoothing.
-
-Contextual candidates also use **other ETFs'** recent returns, trends, and volatility. Equity ETFs proxy broad market conditions; AGG/TLT proxy bond-market conditions; GLD supplies gold context; UUP supplies dollar context. These are market-environment proxies, not direct measurements of inflation, unemployment, geopolitical events, or news sentiment.
-
-### Hugging Face models and joint fine-tuning
-
-The project benchmarks:
-
-- `amazon/chronos-bolt-tiny`: frozen price-only forecasts.
-- `amazon/chronos-2`: frozen price-only and historical-context forecasts.
-- **Chronos-2 with a project-trained LoRA adapter:** jointly adapted to all seven ETF histories, using historical technical indicators and the eight market-price series.
-
-The adapter uses 120 optimizer steps, learning rate `1e-5`, LoRA rank 8, a 256-session context, and a 10-session forecast horizon. ETF fine-tuning ends **30 September 2025**. It uses historical covariates only; future indicators or ETF prices are not supplied.
-
-Pinned base-model revisions predate the November 2025 evaluation start. The neural model outputs price quantiles; an approximate directional probability is obtained by interpolating the forecast deciles. Its probabilities and intervals have not been calibrated for financial markets.
-
-The adapter is experimental and is shown separately in the dashboard. A favorable retrospective score does not automatically replace the model selected using earlier validation data.
-
-## Retrain and refresh
+## Train, refresh, and track future forecasts
 
 ```bash
-# Retrain all seven ETF models from the included snapshot, offline.
-python -m src.universe
+# Full offline research run, including chronological validation and evaluation.
+python -m src.research
 
-# Download a consistent, longer market snapshot and retrain all seven.
+# Retrain one horizon. Existing forecasts are preserved in the issue ledger.
+python -m src.research --horizons 20
+
+# Refresh market/environment snapshots and retrain all horizons.
 python -m src.universe --download --start 2007-01-01
 
-# Train a specific ETF.
-python -m src.train --ticker QQQ
+# Re-evaluate issued forecasts when actual later prices become available.
+python -m src.forward
 
-# Check temporal boundaries, model inputs, and the dashboard.
+# Correctness and dashboard checks.
 python -m unittest discover -s tests -v
 ```
 
-Downloads use Yahoo Finance through yfinance, with dividend/split-adjusted OHLC. The exclusive end date defaults to today in New York to avoid an incomplete current session. `--end YYYY-MM-DD` makes the cutoff explicit. Downloads are validated for all ETFs before replacing the shared snapshot; failed downloads leave it untouched.
+`python -m src.train` is an alias for the current full training run. `python -m src.download` refreshes data only. Downloads default to an exclusive end date of today in New York, excluding an incomplete current session. `--end YYYY-MM-DD` makes the cutoff explicit.
 
-Model and data files must match. After a data refresh, retrain all assets; the app detects a changed snapshot and asks for retraining. Restart Streamlit after replacing models. Avoid using the app while a training command is updating its files.
+Snapshots are checked for duplicate and missing ETF sessions and adequate coverage. Models/report hashes must match the snapshots; the app rejects stale combinations. After refreshing, retrain all horizons before relying on the dashboard. Avoid running the app while training updates its files.
 
-### Reproduce optional neural training
+## Review findings and implemented safeguards
 
-Install the heavier dependencies into your existing environment only when needed:
+The earlier pipeline already kept logistic/Ridge preprocessing inside training pipelines, purged fitting/calibration target overlap, used rolling history, limited model depth, and fixed random seeds. The review identified these gaps:
 
-```bash
-python -m pip install -r requirements-hf.txt
-python -m src.fetch_foundation
-python -m src.finetune
-python -m src.foundation
-```
+| Finding | Refactor |
+| --- | --- |
+| No explicit embargo after validation | Twenty actual market sessions after the last validation outcome are embargoed; later fitting and calibration exclude those dates. |
+| Validation dates near year-end could have outcomes in the next period | Both validation and evaluation slices require the entire outcome window to end within their period. |
+| Environment inputs included raw index levels | Use lagged changes and rolling Z-scores referenced to the previous 252 sessions; no raw environment levels enter models. |
+| Liquidity proxy depended on nominal price scale | Normalize recent illiquidity by its strictly historical rolling mean. |
+| Annual evaluation was pooled in the summary | Report each period and asset separately, including accuracy, balanced accuracy, log loss, Brier score, ECE, and confusion matrices. |
+| Calibration-fit diagnostics could be mistaken for evaluation | Label these as in-sample diagnostics and calculate separate out-of-sample probability scores. |
+| Previously inspected dates could be presented as a fresh holdout | Mark all historical results exploratory and keep issued forward forecasts separately. |
+| Historical vendor corrections are not original release vintages | Disclose this source limitation; observation delays do not remove historical revisions. |
 
-`fetch_foundation` downloads only pinned model configs and safetensors. Base weights are cached outside the project in the system temporary directory. Fine-tuning uses temporary checkpoints and retains only the small adapter and training metadata in `models/`. Downloaded base weights are not committed to GitHub. CPU inference and training are supported; `src.foundation --device cuda` supports compatible CUDA installations.
+The refactored training script is [`src/research.py`](src/research.py); causal feature generation is in [`src/context.py`](src/context.py).
 
-Re-running the fixed training recipe is an experiment, not permission to select parameters using the already inspected test results. After refreshing beyond the included snapshot, keep fine-tuning cutoffs and evaluation dates explicit.
+### Splitting and non-stationarity
 
-## How evaluation avoids future information
+- Split by **global trading date**, keeping all assets for a date together.
+- Use the preceding **five years** of mature outcomes at every refit. This is a rolling training window.
+- Reserve the final **126 historical sessions** for probability and interval calibration.
+- Purge fitting rows whose target outcomes reach calibration. Purge all fitting/calibration outcomes that reach validation/evaluation.
+- End every scored period before its boundary, including the target's end date.
+- Embargo **20 market sessions after the last scored outcome**. Advance the next scored period past that embargo and exclude embargo observations from subsequent fits/calibration.
+- Fit imputation, missingness indicators, and scaling only inside each training pipeline. Tree models use their native missing-value handling and learn bins only from their fit data.
+- Disable histogram boosting's random internal validation. Use fixed iteration budgets and explicit regularization.
 
-For the ETF classifiers, the final 20% of labeled dates is reserved as a chronological holdout. Four expanding development folds select the candidate with lowest mean log loss. A 10-session gap and explicit label-maturity checks ensure that training outcomes end before validation/test dates begin. Scaling is fitted inside each logistic-regression training fold.
+Earlier scored outcomes may enter a later refit once they are known, as in a real walk-forward process. This does not make successive folds independent. Post-validation embargoes supplement outcome purging; they do not eliminate all financial dependence.
 
-The final 10 sessions have unknown direction labels and are excluded from training. Indicators are computed using past and current completed sessions only, with no backward or forward filling. Targets are shifted on the original trading-session index before removing invalid indicator rows.
+Validation nominal periods are 2018–2019, 2020–2021, and 2022–2023. Subsequent starts move forward to respect embargoes. Selection uses mean asset-level validation log loss across the three periods. The 2024, 2025, and 2026 evaluation blocks refit annually using only earlier mature outcomes. Evaluation scores never choose the candidate.
 
-Each selected classifier is then refitted on all mature labels for **latest-session inference only**. Historical holdout predictions come from its separate pre-holdout fit. The app never evaluates past dates with the later refit.
+### Features and model families
 
-The Chronos comparison starts **3 November 2025**, after both pinned base-model revisions and the ETF adaptation cutoff. Every forecast sees only its own historical window, and cross-learning across different as-of windows is disabled. The report includes daily scores and a subset with non-overlapping 10-session outcomes. Neither is an untouched future test after this research run.
+Market inputs include percentage-return momentum, price-relative moving averages/MACD, RSI, relative volume, normalized volatility/liquidity, drawdown, ATR relative to price, rolling correlations/beta, relative strength, calendar cycles, and historical frequencies of already realized outcomes. Fixed asset/class indicators describe the predeclared universe; their categories are not learned from future observations.
 
-## Accuracy of the included run
+Environment observations are delayed by two completed market sessions. Stale values are removed. Volatility and Treasury-index levels become changes and backward-looking Z-scores. These transformations reduce dependence on nominal levels; they do not mathematically guarantee stationarity across regimes.
 
-The following are the **validation-selected defaults** on each ETF's held-out period, roughly December 2022–6 November 2026:
+Compared families:
 
-| ETF | Direction accuracy | Balanced accuracy | Selected default |
-| --- | ---: | ---: | --- |
-| SPY | 64.0% | 50.0% | Prior baseline |
-| QQQ | 62.5% | 50.0% | Prior baseline |
-| IWM | 56.4% | 50.0% | Prior baseline |
-| VEU | 57.4% | 50.0% | Prior baseline |
-| AGG | 54.2% | 50.0% | Prior baseline |
-| TLT | 47.3% | 50.0% | Prior baseline |
-| GLD | 58.8% | 50.0% | Prior baseline |
+- Smoothed prior probability for each asset.
+- Pooled logistic regression with strong L2 regularization (`C=0.01`).
+- CatBoost with market inputs, and a matched CatBoost with environmental context: depth 5, 240 iterations, learning rate 0.03, L2 leaf penalty 20.
+- Histogram gradient boosting: 15 leaves, minimum 100 observations per leaf, L2 penalty 20, 160 iterations, no random early-stopping split.
+- Fixed equal-weight ensemble and a version blended equally with the prior.
 
-All selected defaults currently predict UP because their training priors exceed 50%. Their accuracies reflect the holdout's UP frequency; their 50% balanced accuracies demonstrate no direction discrimination. The more complex candidates did not consistently beat these baselines on the earlier validation folds. The app states **“No validated timing signal”** for these defaults.
+Non-baseline probability estimates receive sigmoid calibration using the separate historical calibration slice. A Ridge model estimates volatility-normalized expected return. A regularized CatBoost quantile model predicts the 10th/50th/90th percentiles; per-asset historical calibration widens the interval. Dependence and changing distributions mean nominal 80% coverage is not guaranteed.
 
-### Fine-tuned neural model: separate later-period test
+## Data and scope
 
-The Chronos-2 adapter was evaluated on **255 daily as-of dates per ETF, 3 November 2025–6 November 2026**. This period differs from the classifier holdout above. Compare these results only with baselines from the same period.
+Targets: SPY, QQQ, IWM, VEU, AGG, TLT, GLD, XLF, XLK, XLE, XLV, XLI, XLU, XLP, XLY, XLB, EEM, EFA, HYG, LQD, IEF, and DBC. UUP supplies additional dollar context.
 
-| ETF | Fine-tuned accuracy | Balanced accuracy | Always-UP accuracy |
-| --- | ---: | ---: | ---: |
-| SPY | 45.1% | 44.1% | 52.5% |
-| QQQ | 47.8% | 48.0% | 49.0% |
-| IWM | 45.9% | 45.5% | 51.8% |
-| VEU | 52.9% | 51.6% | 53.3% |
-| AGG | 51.4% | 50.6% | 51.4% |
-| TLT | 47.5% | 51.1% | 40.8% |
-| GLD | 56.5% | 56.8% | 49.0% |
+The saved Yahoo snapshot covers 2007–20 November 2026, subject to inception dates. ETF OHLC is dividend/split-adjusted. Environment inputs are Yahoo's VIX and 13-week/5-year/10-year/30-year Treasury-yield indices **as reported**. They are market-environment proxies, not direct inflation/employment releases. The public FRED download was unavailable during this run; no substitute economic values were fabricated.
 
-The daily target windows overlap. The report also provides **26 non-overlapping windows per ETF**; this is a small research sample. Fine-tuning is not assumed to improve every asset, and these results do not establish a dependable trading advantage.
+No paid feed, historical news archive, original economic-release vintages, brokerage execution, or cloud GPU service is included. Yahoo history can be revised. Strict point-in-time guarantees require point-in-time source data, even when feature timing is correct.
 
-See `data/training_results.json` for every candidate's fold and holdout scores, and `data/foundation_results.json` for the neural comparison, interval coverage, model revisions, and adaptation recipe. Log loss and Brier score assess probability quality; lower is better. These runs do not establish investment profitability.
+## Included results
 
-## Compact project layout
+Equal-weight averages across 22 ETFs, using the embargoed 2024–2026 evaluation periods:
+
+| Horizon | Selected model | Accuracy | Balanced accuracy | Prior accuracy |
+| --- | --- | ---: | ---: | ---: |
+| 1 sessions | cat_market | 52.29% | 50.08% | 52.93% |
+| 5 sessions | shrink_ensemble | 55.06% | 49.50% | 55.77% |
+| 10 sessions | shrink_ensemble | 56.12% | 49.38% | 57.05% |
+| 20 sessions | cat_context | 58.12% | 51.93% | 60.08% |
+
+The selected models do not consistently outperform the priors. These results quantify the current limitation; richer inputs and more complex estimators are not assumed to improve accuracy. Expected-return forecasts are also compared against a zero-return forecast, and interval coverage is reported rather than assumed.
+
+Read `data/research_results.json` for every validation fold, annual evaluation, asset, candidate, calibration diagnostic, confidence-interval calculation, and model-selection decision. The dashboard exposes annual regime stability directly. `data/research_predictions.csv` contains the saved evaluation predictions and fitting-outcome cutoffs.
+
+These dates overlap previously inspected experiments. They are valid chronological simulations but cannot be described as a new untouched test. Daily multi-session targets overlap, and ETFs are correlated. Date-block bootstrap intervals retain all assets together; they do not correct for repeated research or selecting among multiple horizons.
+
+### Execution study
+
+The optional research study uses a fixed 60% UP-probability threshold and predicted return above assumed round-trip costs. Each sampled holding window is a separate round trip: enter at the next adjusted open, exit after the horizon, charge 5 basis points each way, and hold cash during gaps. Cash interest is zero. Buy/hold-window comparisons use the same round-trip convention.
+
+Drawdown is measured at holding-period endpoints; intraperiod drawdowns are not shown. This study excludes market impact, financing, taxes, and operational slippage. It is not live trading performance or a portfolio-suitability calculation.
+
+### Forward evidence
+
+`data/forecast_ledger.csv` preserves the first forecast issued for each asset/date/horizon, including versions issued before later refits. Retraining does not rewrite those probabilities. `src.forward` scores a forecast only after its future market session exists and rejects issue timestamps outside the interval between its as-of close and the next session's open. All current entries are pending at issue time. Forecast evidence is kept distinct from retrospective simulations.
+
+## Files
 
 ```text
-app.py                 Dashboard
-src/                   Download, feature, training, and neural-model code
-tests/                 Correctness and dashboard checks
-data/                  One shared market snapshot, saved predictions, evaluation JSON
-models/                Per-ETF model files, LoRA adapter, and training metadata
-requirements.txt       Dashboard and classical-model dependencies
-requirements-hf.txt    Optional pretrained-model and fine-tuning dependencies
+app.py                         Dashboard
+src/research.py                Walk-forward fitting, calibration, embargo, evaluation, refit
+src/context.py                 Shared market panel and causal stationary-style features
+src/train.py                   Portable model primitives and training alias
+src/universe.py                Validated downloads and training entry point
+src/forward.py                 Resolution of genuinely issued forecasts
+src/features.py                Technical indicator primitives
+tests/                         Leakage, preprocessing, timing, artifact, and UI checks
+data/market_prices.csv         One shared ETF snapshot
+data/environment.csv           One environment snapshot
+data/research_results.json     Per-fold/per-period evidence and configuration
+data/research_predictions.csv  Saved evaluation predictions
+data/forecast_ledger.csv       Issued forecasts and eventual observed outcomes
+models/horizon_*.joblib        Four pooled models and calibration/return heads
 ```
 
-Indicators are regenerated from the shared market snapshot rather than stored as duplicate per-ETF feature datasets. Temporary training folders, copied legacy notebooks, superseded models/data, and generated artifact directories have been removed. Earlier project versions remain available in Git history. Automated checks run in GitHub Actions.
+Superseded single-ETF and neural experiment outputs have been removed from the active layout. Earlier versions remain in Git history. No duplicate feature datasets, extra training environments, or artifact folders are retained.
 
-## Limits and next useful experiments
+References: [scikit-learn time-series splitting](https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.TimeSeriesSplit.html), [histogram boosting](https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.HistGradientBoostingClassifier.html), [CatBoost objectives](https://catboost.ai/docs/en/concepts/loss-functions), [FRED historical real-time periods](https://fred.stlouisfed.org/docs/api/fred/realtime_period.html).
 
-- Overlapping daily 10-session targets are dependent. Hundreds of daily predictions are not hundreds of independent trials. Non-overlapping scores also have a limited sample size; no significance or superiority claim is made.
-- This is an after-close research system using the completed session's prices and volumes. It is not an intraday execution strategy.
-- Yahoo adjusted history can be revised; the saved data hashes identify the snapshot but do not make it a full point-in-time institutional dataset. Pretraining corpora also cannot be exhaustively audited.
-- Indicator descriptions are context, not explanations of a particular neural prediction. Personal investment amount and risk tolerance are not used to produce allocations.
-- Additional macroeconomic data should use actual release dates and historical vintages. News sentiment needs timestamped historical articles and an explicitly evaluated connection to future returns; plugging in a sentiment model alone would not establish that connection.
-- Future changes need a new forward evaluation period. A trading study also needs executable entry prices, holding/rebalancing rules, transaction costs, and uncertainty estimates.
-
-References: [Chronos models and release history](https://github.com/amazon-science/chronos-forecasting), [Chronos-2 model card](https://huggingface.co/amazon/chronos-2), [scikit-learn chronological splitting](https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.TimeSeriesSplit.html), [yfinance download behavior](https://ranaroussi.github.io/yfinance/reference/api/yfinance.download.html).
-
-**Mario Rinaldi · BSc Computer Science final-year project.** For academic and educational research; this system does not provide personalized financial advice.
+**Mario Rinaldi.** Financial modelling research; forecasts are uncertain and do not establish suitable investments or allocations.

@@ -1,14 +1,13 @@
-"""Refresh and train each supported ETF. Run: python -m src.universe [--download]."""
+"""Refresh the shared snapshots and train the pooled multi-horizon models."""
 import argparse
-import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
-
 import pandas as pd
+from .context import ASSETS, ENV_SYMBOLS, HORIZONS
+from .data import ROOT
 from .features import validate_prices
-from .train import train, ROOT
 
-TICKERS = ['SPY', 'QQQ', 'IWM', 'VEU', 'AGG', 'TLT', 'GLD']
+TICKERS = list(ASSETS)
 CONTEXT_TICKERS = TICKERS + ['UUP']
 
 
@@ -19,10 +18,9 @@ def download(start, end):
         raise RuntimeError('Market download failed; existing snapshots were left untouched.')
     snapshots = {}
     for ticker in CONTEXT_TICKERS:
-        frame = raw.xs(ticker, level=1, axis=1).dropna(subset=['Close', 'High', 'Low', 'Volume'])
-        frame = validate_prices(frame)
-        if len(frame) < 800:
-            raise ValueError(f'Insufficient market history for {ticker}.')
+        frame = validate_prices(raw.xs(ticker, level=1, axis=1).dropna(subset=['Close', 'High', 'Low', 'Open', 'Volume']))
+        if len(frame) < 1000:
+            raise ValueError(f'Insufficient history for {ticker}.')
         snapshots[ticker] = frame
     sessions = snapshots['SPY'].index
     for frame in snapshots.values():
@@ -30,23 +28,19 @@ def download(start, end):
     for ticker, frame in snapshots.items():
         expected = sessions[(sessions >= frame.index.min()) & (sessions <= frame.index.max())]
         if len(expected.difference(frame.index)):
-            raise ValueError(f'{ticker} is missing market sessions; refusing to change the snapshot.')
-    latest = {frame.index.max() for frame in snapshots.values()}
-    if len(latest) != 1:
-        raise ValueError('Market snapshots end on different sessions. Retry after all markets close.')
+            raise ValueError(f'{ticker} is missing market sessions; existing data was not changed.')
+    if len({frame.index.max() for frame in snapshots.values()}) != 1:
+        raise ValueError('ETF snapshots end on different sessions; retry after all markets close.')
+    environment = yf.download(list(ENV_SYMBOLS), start=start, end=end, auto_adjust=False, progress=False)
+    environment = environment['Close'].rename(columns=ENV_SYMBOLS)
+    if environment.notna().sum().min() < 1000 or len(environment.columns) != len(ENV_SYMBOLS):
+        raise ValueError('Incomplete environment download; existing data was not changed.')
     combined = pd.concat([frame.assign(Ticker=ticker) for ticker, frame in snapshots.items()])
-    temporary = ROOT / 'data/market_prices.tmp'
-    combined.to_csv(temporary, index_label='Date')
-    temporary.replace(ROOT / 'data/market_prices.csv')
-
-
-def train_universe(tickers):
-    path = ROOT / 'data/training_results.json'
-    results = json.loads(path.read_text()) if path.exists() else {}
-    for ticker in tickers:
-        print(f'Training {ticker}', flush=True)
-        results[ticker] = train(ticker)
-        path.write_text(json.dumps(results, indent=2) + '\n')
+    market_tmp, environment_tmp = ROOT / 'data/market_prices.tmp', ROOT / 'data/environment.tmp'
+    combined.to_csv(market_tmp, index_label='Date')
+    environment.to_csv(environment_tmp, index_label='Date')
+    market_tmp.replace(ROOT / 'data/market_prices.csv')
+    environment_tmp.replace(ROOT / 'data/environment.csv')
 
 
 if __name__ == '__main__':
@@ -54,8 +48,9 @@ if __name__ == '__main__':
     parser.add_argument('--download', action='store_true')
     parser.add_argument('--start', default='2007-01-01')
     parser.add_argument('--end', default=datetime.now(ZoneInfo('America/New_York')).date().isoformat())
-    parser.add_argument('--tickers', nargs='+', choices=TICKERS, default=TICKERS)
+    parser.add_argument('--horizons', nargs='+', type=int, choices=HORIZONS, default=HORIZONS)
     args = parser.parse_args()
     if args.download:
         download(args.start, args.end)
-    train_universe(args.tickers)
+    from .research import run
+    run(args.horizons)
