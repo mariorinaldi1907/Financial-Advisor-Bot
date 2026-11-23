@@ -1,6 +1,5 @@
 """Run with python -m src.train. Selection uses development folds only."""
 import argparse
-import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,13 +18,14 @@ from sklearn.model_selection import TimeSeriesSplit
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-from .features import HORIZON, LEGACY_FEATURES, CORE_FEATURES, EXTRA_FEATURES, build_features, add_target
+from .data import MARKET_PATH, load_market, raw_digest, snapshot_digest
+from .features import HORIZON, LEGACY_FEATURES, CORE_FEATURES, EXTRA_FEATURES, build_features, add_target, build_market_context
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def candidates():
-    return {
+def candidates(context_features=None):
+    registry = {
         'prior_baseline': (DummyClassifier(strategy='prior'), CORE_FEATURES),
         'original_rf': (RandomForestClassifier(n_estimators=300, max_depth=8, random_state=42, n_jobs=-1), LEGACY_FEATURES),
         'normalized_rf': (RandomForestClassifier(n_estimators=300, max_depth=5, min_samples_leaf=25, max_features=0.7, random_state=42, n_jobs=-1), CORE_FEATURES),
@@ -33,6 +33,12 @@ def candidates():
         'logistic': (make_pipeline(StandardScaler(), LogisticRegression(C=0.1, max_iter=2000)), CORE_FEATURES),
         'expanded_logistic': (make_pipeline(StandardScaler(), LogisticRegression(C=0.1, max_iter=2000)), CORE_FEATURES + EXTRA_FEATURES),
     }
+    if context_features:
+        cols = CORE_FEATURES + EXTRA_FEATURES + context_features
+        registry['contextual_rf'] = (RandomForestClassifier(n_estimators=300, max_depth=4, min_samples_leaf=40, max_features=0.7, random_state=42, n_jobs=-1), cols)
+        for strength in [0.01, 0.1]:
+            registry[f'contextual_logistic_{strength}'] = (make_pipeline(StandardScaler(), LogisticRegression(C=strength, max_iter=3000)), cols)
+    return registry
 
 
 def scores(y, p):
@@ -50,10 +56,13 @@ def purged_before(frame, boundary):
     return frame.loc[frame.Label_end < boundary]
 
 
-def train(raw_path, output):
-    raw = pd.read_csv(raw_path, index_col=0, parse_dates=True)
+def train(ticker='SPY', output=ROOT, prices_path=MARKET_PATH):
+    raw, markets = load_market(ticker, prices_path)
     all_features = build_features(raw)
-    features = all_features.dropna(subset=LEGACY_FEATURES + CORE_FEATURES + EXTRA_FEATURES)
+    context = build_market_context(markets, exclude=ticker)
+    context_cols = list(context.columns)
+    all_features = all_features.join(context, how='left')
+    features = all_features.dropna(subset=LEGACY_FEATURES + CORE_FEATURES + EXTRA_FEATURES + context_cols)
     # Shift on the original trading-session index before removing invalid feature rows.
     labeled = add_target(all_features).loc[features.index].dropna(subset=['Target'])
     if len(labeled) < 800:
@@ -61,7 +70,7 @@ def train(raw_path, output):
     split = int(len(labeled) * .8)
     test = labeled.iloc[split:]
     dev = purged_before(labeled.iloc[:split], test.index[0])
-    registry = candidates()
+    registry = candidates(context_cols)
     results = {}
     for name, (estimator, cols) in registry.items():
         folds = []
@@ -88,11 +97,13 @@ def train(raw_path, output):
     estimator, cols = registry[winner]
     deployed = clone(estimator).fit(labeled[cols], labeled.Target.astype(int))
     metadata = dict(schema_version=1, created_utc=datetime.now(timezone.utc).isoformat(),
-                    ticker='SPY', horizon=HORIZON, selected_model=winner, features=cols,
+                    ticker=ticker, horizon=HORIZON, selected_model=winner, features=cols,
                     selection_metric='mean development-fold log loss (lower is better)',
-                    sklearn_version=sklearn.__version__, raw_sha256=hashlib.sha256(Path(raw_path).read_bytes()).hexdigest(),
+                    sklearn_version=sklearn.__version__, raw_sha256=raw_digest(raw), snapshot_sha256=snapshot_digest(prices_path),
                     raw_start=str(raw.index.min().date()), raw_end=str(raw.index.max().date()),
                     raw_rows=len(raw), labeled_rows=len(labeled),
+                    context_sha256=snapshot_digest(prices_path),
+                    context_features=context_cols,
                     development_end=str(dev.index.max().date()),
                     development_label_end=str(dev.Label_end.max().date()),
                     holdout_start=str(test.index.min().date()), holdout_end=str(test.index.max().date()),
@@ -104,18 +115,22 @@ def train(raw_path, output):
                              'Holdout is a retrospective comparison; no trading-profit claim is made.',
                              'Probabilities are uncalibrated model estimates.',
                              'Latest-date refit must not be used to evaluate historical dates.'])
-    for folder in ['models', 'reports', 'data']:
-        (output / folder).mkdir(parents=True, exist_ok=True)
-    joblib.dump(dict(model=deployed, metadata=metadata), output / 'models/forecast.joblib', compress=3)
-    features.to_csv(output / 'data/spy_features.csv', index_label='Date')
-    predictions.to_csv(output / 'reports/holdout_predictions.csv', index_label='Date')
-    (output / 'reports/evaluation.json').write_text(json.dumps(metadata, indent=2) + '\n')
-    print(json.dumps(dict(selected=winner, validation_log_loss={n: r['mean_log_loss'] for n,r in results.items()}, holdout=holdout), indent=2))
+    (output / 'models').mkdir(parents=True, exist_ok=True)
+    (output / 'data').mkdir(parents=True, exist_ok=True)
+    joblib.dump(dict(model=deployed, metadata=metadata), output / 'models' / f'{ticker.lower()}_forecast.joblib', compress=3)
+    predictions.to_csv(output / 'data' / f'{ticker.lower()}_predictions.csv', index_label='Date')
+    print(json.dumps(dict(ticker=ticker, selected=winner, validation_log_loss={n: r['mean_log_loss'] for n,r in results.items()}, holdout=holdout), indent=2))
+    return metadata
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--raw', type=Path, default=ROOT / 'data/raw/spy.csv')
+    parser.add_argument('--prices', type=Path, default=MARKET_PATH)
     parser.add_argument('--output', type=Path, default=ROOT)
+    parser.add_argument('--ticker', default='SPY')
     args = parser.parse_args()
-    train(args.raw, args.output)
+    metadata = train(args.ticker, args.output, args.prices)
+    results_path = args.output / 'data/training_results.json'
+    results = json.loads(results_path.read_text()) if results_path.exists() else {}
+    results[args.ticker] = metadata
+    results_path.write_text(json.dumps(results, indent=2) + '\n')

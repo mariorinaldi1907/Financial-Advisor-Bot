@@ -1,0 +1,74 @@
+{
+  "base_model": "amazon/chronos-2",
+  "revision": "ff35bf3168857dce1984939b85d8955976f12f32",
+  "revision_date": "2025-10-30T16:36:32+00:00",
+  "train_cutoff": "2025-09-30",
+  "num_steps": 120,
+  "learning_rate": 1e-05,
+  "batch_size": 32,
+  "seed": 42,
+  "mode": "lora",
+  "context_length": 256,
+  "horizon": 10,
+  "historical_covariates": [
+    "RSI_14",
+    "Mom_10",
+    "Volatility_20",
+    "Relative_volume",
+    "SMA_gap_30",
+    "Market_AGG",
+    "Market_GLD",
+    "Market_IWM",
+    "Market_QQQ",
+    "Market_SPY",
+    "Market_TLT",
+    "Market_UUP",
+    "Market_VEU"
+  ],
+  "training_series": {
+    "SPY": {
+      "rows": 4672,
+      "start": "2007-03-08",
+      "end": "2025-09-30",
+      "raw_sha256": "2bb3e16fb92bd3164c3f95c96808b7483b5a418cbf615078c7ec984dfdd03b93"
+    },
+    "QQQ": {
+      "rows": 4672,
+      "start": "2007-03-08",
+      "end": "2025-09-30",
+      "raw_sha256": "e3e65bd014d74790a5679e0536da0bd292c77449cd0719d7b80770e58b812387"
+    },
+    "IWM": {
+      "rows": 4672,
+      "start": "2007-03-08",
+      "end": "2025-09-30",
+      "raw_sha256": "85dd7b43cad92ae2badff352bc467a83d4a80345283aa5c9506a2115e22aedab"
+    },
+    "VEU": {
+      "rows": 4643,
+      "start": "2007-04-19",
+      "end": "2025-09-30",
+      "raw_sha256": "6b222e975803d7c8d24a332f7563a76d5879820a35342a00ec81238158ebab0c"
+    },
+    "AGG": {
+      "rows": 4672,
+      "start": "2007-03-08",
+      "end": "2025-09-30",
+      "raw_sha256": "6a3b7cf19483219b4683ddde45a95826451f696ef292826418083e12dee28cca"
+    },
+    "TLT": {
+      "rows": 4672,
+      "start": "2007-03-08",
+      "end": "2025-09-30",
+      "raw_sha256": "a26edd1158462aa01b8eabc5e4424278ad554ec00a901600903faf4025994ca6"
+    },
+    "GLD": {
+      "rows": 4672,
+      "start": "2007-03-08",
+      "end": "2025-09-30",
+      "raw_sha256": "897f27825b6c776783162ba790d489b1a562134142d84f57b616f7413ce42d9b"
+    }
+  },
+  "context_sha256": "86aaddfa62482dc297587322895c3dec7d752375ecd3853fdcd05cecffc1a305",
+  "caveat": "Fixed-budget experimental adaptation. No test-period values or model selection used in fine-tuning."
+}

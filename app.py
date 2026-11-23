@@ -1,15 +1,24 @@
 """SPY research dashboard. Run: python -m streamlit run app.py."""
 from pathlib import Path
+import hashlib
 
 import joblib
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from src.data import MARKET_PATH, feature_frame, snapshot_digest
 
 ROOT = Path(__file__).resolve().parent
 st.set_page_config(page_title='Financial Advisor Bot', page_icon='📈', layout='wide')
 st.title('📈 Financial Advisor Bot')
-st.caption('SPY · 10 trading day direction · educational research prototype')
+st.caption('Multi-ETF · 10 trading day direction · educational research prototype')
+ASSET_NAMES = {'SPY': 'US large-cap stocks', 'QQQ': 'Nasdaq 100', 'IWM': 'US small-cap stocks', 'VEU': 'International stocks', 'AGG': 'US aggregate bonds', 'TLT': 'Long-duration US Treasuries', 'GLD': 'Gold'}
+assets = [t for t in ASSET_NAMES if (ROOT / 'models' / f'{t.lower()}_forecast.joblib').exists()]
+if not assets:
+    st.error('Train the ETF models first: python -m src.universe')
+    st.stop()
+ticker = st.sidebar.selectbox('ETF', assets, format_func=lambda t: f'{t} — {ASSET_NAMES[t]}')
+st.subheader(f'{ticker} · {ASSET_NAMES[ticker]}')
 
 
 @st.cache_resource
@@ -22,18 +31,24 @@ def load_csv(path, modified):
     return pd.read_csv(path, index_col=0, parse_dates=True)
 
 
-paths = {name: ROOT / path for name, path in {
-    'model': 'models/forecast.joblib', 'features': 'data/spy_features.csv',
-    'predictions': 'reports/holdout_predictions.csv',
-}.items()}
+@st.cache_data
+def load_features(path, modified, ticker):
+    return feature_frame(ticker, path).dropna()
+
+
+paths = {'model': ROOT / 'models' / f'{ticker.lower()}_forecast.joblib',
+         'market': MARKET_PATH,
+         'predictions': ROOT / 'data' / f'{ticker.lower()}_predictions.csv'}
 if any(not p.exists() for p in paths.values()):
-    st.error('Training artifacts are missing. Run: python -m src.train')
+    st.error('Training artifacts are missing. Run: python -m src.universe')
     st.stop()
 try:
     bundle = load_bundle(str(paths['model']), paths['model'].stat().st_mtime_ns)
-    data = load_csv(str(paths['features']), paths['features'].stat().st_mtime_ns)
+    data = load_features(str(paths['market']), paths['market'].stat().st_mtime_ns, ticker)
     historical = load_csv(str(paths['predictions']), paths['predictions'].stat().st_mtime_ns)
     model, meta = bundle['model'], bundle['metadata']
+    if snapshot_digest() != meta['snapshot_sha256']:
+        raise ValueError('Market data changed after training. Run: python -m src.universe')
     if str(data.index.max().date()) != meta['raw_end']:
         raise ValueError('Model and feature snapshot dates disagree. Retrain all artifacts together.')
     if data[meta['features']].isna().any().any():
@@ -47,6 +62,12 @@ st.caption(f"Data: {meta['raw_start']} to {meta['raw_end']} · Selected model: {
 if age > 7:
     st.warning(f'This snapshot is {age} calendar days old. Refresh data and retrain before interpreting it as a current forecast.')
 
+selected_scores = meta['holdout'][meta['selected_model']]
+a, b, c = st.columns(3)
+a.metric('Held-out direction accuracy', f"{selected_scores['accuracy']:.1%}")
+b.metric('Held-out balanced accuracy', f"{selected_scores['balanced_accuracy']:.1%}")
+c.metric('Always-UP baseline accuracy', f"{meta['always_up_holdout']['accuracy']:.1%}")
+st.caption(f"Evaluation: {meta['holdout_start']} to {meta['holdout_end']}. Models are selected on earlier validation folds, never on these accuracy figures.")
 st.sidebar.header('Explore forecasts')
 mode = st.sidebar.radio('View', ['Latest forecast', 'Historical holdout'])
 if mode == 'Historical holdout':
@@ -109,3 +130,37 @@ with st.expander('Evaluation and model selection', expanded=False):
     st.download_button('Download historical predictions', paths['predictions'].read_bytes(), 'holdout_predictions.csv', 'text/csv')
 
 st.caption('Academic prototype for research and education. It does not assess your finances, determine suitable allocations, or provide personalized investment advice.')
+
+with st.expander('Accuracy across all trained ETFs'):
+    summary_path = ROOT / 'data/training_results.json'
+    if summary_path.exists():
+        import json
+        runs = json.loads(summary_path.read_text())
+        summary = pd.DataFrame([dict(ticker=t, selected_model=m['selected_model'], accuracy=m['holdout'][m['selected_model']]['accuracy'], balanced_accuracy=m['holdout'][m['selected_model']]['balanced_accuracy'], log_loss=m['holdout'][m['selected_model']]['log_loss'], baseline_log_loss=m['holdout']['prior_baseline']['log_loss'], always_up_accuracy=m['always_up_holdout']['accuracy']) for t,m in runs.items()])
+        st.dataframe(summary.set_index('ticker').style.format({c: '{:.3f}' for c in ['accuracy', 'balanced_accuracy', 'log_loss', 'baseline_log_loss', 'always_up_accuracy']}), width='stretch')
+        st.caption('Each ETF has its own chronological split and selected model. Compare with its own baseline; periods may differ slightly by listing history. Contextual candidates use other ETFs as equity, bond, gold and dollar proxies, not direct macroeconomic releases.')
+
+foundation_path = ROOT / 'data/foundation_results.json'
+if foundation_path.exists():
+    import json
+    research = json.loads(foundation_path.read_text())
+    adapter_file = ROOT / 'models/chronos2_adapter.safetensors'
+    adapter_matches = not research.get('adapter_sha256') or (adapter_file.exists() and hashlib.sha256(adapter_file.read_bytes()).hexdigest() == research['adapter_sha256'])
+    if ticker in research['latest'] and research['source_hashes'].get(ticker) == meta['raw_sha256'] and research['context_sha256'] == meta['snapshot_sha256'] and adapter_matches:
+        with st.expander('Hugging Face forecasting research', expanded=True):
+            st.caption('Chronos forecasts are a separate research comparison: frozen pretrained variants plus a LoRA model trained jointly on seven ETFs and historical market context through September 2025. They do not replace the selected model above.')
+            choices = sorted(research['latest'][ticker], key=lambda n: (n != 'chronos2_finetuned_context', n))
+            choice = st.selectbox('Foundation model', choices)
+            forecast = research['latest'][ticker][choice]
+            st.write(f"Latest snapshot: {forecast['as_of']} · Approximate P(UP): {forecast['p_up']:.1%}")
+            fan = go.Figure()
+            steps = list(range(1, 11))
+            fan.add_trace(go.Scatter(x=steps, y=forecast['upper'], mode='lines', line=dict(width=0), name='90th percentile'))
+            fan.add_trace(go.Scatter(x=steps, y=forecast['lower'], fill='tonexty', mode='lines', line=dict(width=0), name='10th–90th percentile band'))
+            fan.add_trace(go.Scatter(x=steps, y=forecast['median'], name='Median forecast'))
+            fan.add_hline(y=forecast['close'], line_dash='dash')
+            fan.update_layout(xaxis_title='Trading sessions after snapshot', yaxis_title='Adjusted USD', height=340)
+            st.plotly_chart(fan, width='stretch')
+            rows = [{'Model': name, 'Windows': val['windows'], 'Accuracy': val['accuracy'], 'Balanced accuracy': val['balanced_accuracy'], 'Log loss': val['log_loss'] if name != 'always_up' else None} for name,val in research['metrics'][ticker].items()]
+            st.dataframe(pd.DataFrame(rows).set_index('Model').style.format({'Accuracy': '{:.1%}', 'Balanced accuracy': '{:.1%}', 'Log loss': '{:.3f}'}, na_rep='—'), width='stretch')
+            st.caption('Exploratory comparison from November 2025 using daily windows. Ten-session outcomes overlap and are not independent; non-overlapping scores are included in the report. Both pinned model revisions and ETF fine-tuning predate the test; probabilities and forecast bands are uncalibrated. Each as-of window is isolated, with cross-learning disabled to prevent future windows influencing earlier forecasts.')

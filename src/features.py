@@ -81,3 +81,25 @@ def add_target(features, horizon=HORIZON):
     df['Label_end'] = pd.Series(df.index, index=df.index).shift(-horizon)
     df['Target'] = (df.Future_Close > df.Close).astype(float).where(df.Future_Close.notna())
     return df
+
+
+def build_market_context(prices, exclude=None):
+    """Market-environment proxies; missing observations are never forward-filled."""
+    prices = prices.copy()
+    prices.index = pd.to_datetime(prices.index)
+    if prices.index.has_duplicates:
+        raise ValueError('Context dates must be unique.')
+    prices = prices.sort_index().apply(pd.to_numeric, errors='raise')
+    if (prices <= 0).any().any():
+        raise ValueError('Context prices must be positive when available.')
+    result = pd.DataFrame(index=prices.index)
+    for symbol in prices.columns:
+        if symbol == exclude:
+            continue
+        close = prices[symbol]
+        returns = close.pct_change(fill_method=None)
+        for n in [5, 20]:
+            result[f'Context_{symbol}_return_{n}'] = close.pct_change(n, fill_method=None)
+        result[f'Context_{symbol}_vol_20'] = returns.rolling(20).std()
+        result[f'Context_{symbol}_trend_50'] = close / close.rolling(50).mean() - 1
+    return result.replace([np.inf, -np.inf], np.nan)
