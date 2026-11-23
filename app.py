@@ -49,6 +49,13 @@ st.html("""
 .stApp [data-testid="stMetricValue"] { color: #173f70; font-size: 1.9rem; }
 .stApp .st-key-fund-controls, .stApp .st-key-price-card, .stApp .st-key-direction-card, .stApp .st-key-range-card, .stApp .st-key-risk-card { background: #fff; border: 1px solid #dde5ef; border-radius: 18px; padding: 22px; box-shadow: 0 4px 18px #17314e04; }
 .st-key-direction-card, .st-key-range-card, .st-key-risk-card { min-height: 260px; }
+[data-baseweb="popover"]:has([data-testid="stSelectboxVirtualDropdown"]),
+[data-baseweb="popover"]:has([data-testid="stSelectboxVirtualDropdown"]) > div,
+[data-testid="stSelectboxVirtualDropdown"] { background: #fff; color: #172b43; }
+[data-testid="stSelectboxVirtualDropdown"] [role="option"],
+[data-testid="stSelectboxVirtualDropdown"] [role="option"] div { color: #172b43; background: transparent; }
+[data-testid="stSelectboxVirtualDropdown"] [role="option"][aria-selected="true"],
+[data-testid="stSelectboxVirtualDropdown"] [role="option"]:hover { background: #eaf3f7; }
 .intro { color: #52657b; font-size: 1.04rem; margin: 0 0 1rem; max-width: 650px; }
 .outlook-card { --accent: #936012; --tint: #fff8e9; padding: 24px 28px; background: var(--tint); border: 1px solid #dfd5bc; border-left: 5px solid var(--accent); border-radius: 16px; margin: .2rem 0 .6rem; }
 .outlook-card.positive { --accent: #126b56; --tint: #edf9f3; border-color: #b9ddcd; }
