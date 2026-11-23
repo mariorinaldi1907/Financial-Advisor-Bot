@@ -1,5 +1,7 @@
 # Financial Advisor Bot — Market Research
 
+[Try the public Market Outlook app](https://mario-market-outlook.streamlit.app/).
+
 A reproducible market-outlook and downside-risk system for **22 ETFs**, with **1-, 5-, 10-, and 20-session horizons**. Shared models learn from technical features, cross-asset relationships, and delayed volatility/Treasury-index context. The beginner-friendly dashboard starts with a **Positive / Uncertain / Negative** outlook, plain explanations, price history, and past forecast accuracy. Detailed research results remain available in an optional section. Each outlook includes a plain-language research takeaway: **Consider buying**, **Wait / review**, or **Consider reducing**. Weak evidence always produces Wait / review; uncertainty is not an automatic hold instruction. These prompts do not assess whether an investment suits someone.
 
 **Status:** research software. Temporal safeguards and richer models do not guarantee an investment edge. The current results do not establish consistent out-of-sample superiority over simple priors.
