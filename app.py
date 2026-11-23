@@ -1,317 +1,111 @@
-# app.py
-# Financial Advisor Bot (SPY Prototype) — Streamlit Dashboard (Polished UI)
-# -----------------------------------------------------------------------
-# Requirements (inside your .venv):
-#   pip install streamlit pandas numpy joblib scikit-learn yfinance plotly
-#
-# Run:
-#   python -m streamlit run app.py
+"""SPY research dashboard. Run: python -m streamlit run app.py."""
+from pathlib import Path
 
-import os
 import joblib
-import numpy as np
 import pandas as pd
-import streamlit as st
 import plotly.graph_objects as go
+import streamlit as st
 
-st.set_page_config(page_title="Financial Advisor Bot", page_icon="📈", layout="wide")
+ROOT = Path(__file__).resolve().parent
+st.set_page_config(page_title='Financial Advisor Bot', page_icon='📈', layout='wide')
+st.title('📈 Financial Advisor Bot')
+st.caption('SPY · 10 trading day direction · educational research prototype')
 
-st.markdown(
-    """
-    <style>
-      .big-title {font-size: 30px; font-weight: 800; margin-bottom: 0px;}
-      .sub-title {font-size: 14px; opacity: 0.85; margin-top: 4px;}
-
-      .card {
-        padding: 14px;
-        border-radius: 14px;
-        background: rgba(255,255,255,0.06);
-        border: 1px solid rgba(255,255,255,0.10);
-      }
-
-      .good {
-        padding: 12px 14px;
-        border-radius: 14px;
-        background: rgba(0, 200, 0, 0.10);
-        border: 1px solid rgba(0, 200, 0, 0.25);
-      }
-
-      .bad {
-        padding: 12px 14px;
-        border-radius: 14px;
-        background: rgba(255, 0, 0, 0.08);
-        border: 1px solid rgba(255, 0, 0, 0.22);
-      }
-
-      .neutral {
-        padding: 12px 14px;
-        border-radius: 14px;
-        background: rgba(255,255,255,0.05);
-        border: 1px solid rgba(255,255,255,0.10);
-      }
-
-      /* Compact KPI cards */
-      .kpi-wrap {display: flex; gap: 10px; margin-top: 6px; margin-bottom: 10px;}
-      .kpi {
-        flex: 1;
-        padding: 10px 12px;
-        border-radius: 14px;
-        background: rgba(255,255,255,0.05);
-        border: 1px solid rgba(255,255,255,0.10);
-      }
-      .kpi-label {font-size: 12px; opacity: 0.8; margin-bottom: 4px;}
-      .kpi-value {font-size: 18px; font-weight: 700; line-height: 1.2;}
-      .kpi-value.small {font-size: 16px;}
-      .small-note {font-size: 12px; opacity: 0.8;}
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
-st.markdown("<div class='big-title'>📈 Financial Advisor Bot (SPY Prototype)</div>", unsafe_allow_html=True)
-st.markdown(
-    "<div class='sub-title'>10-day direction forecast using technical indicators + Random Forest, with explainable recommendations.</div>",
-    unsafe_allow_html=True
-)
-st.write("")
-
-
-MODEL_PATH = os.path.join("models", "rf_model_spy.pkl")
-DATA_PATH = os.path.join("data", "spy_processed.csv")
 
 @st.cache_resource
-def load_model():
-    return joblib.load(MODEL_PATH)
+def load_bundle(path, modified):
+    return joblib.load(path)
+
 
 @st.cache_data
-def load_data():
-    return pd.read_csv(DATA_PATH, index_col=0, parse_dates=True)
+def load_csv(path, modified):
+    return pd.read_csv(path, index_col=0, parse_dates=True)
 
-if not os.path.exists(MODEL_PATH):
-    st.error(f"Model file not found at: {MODEL_PATH}. Make sure you saved it from the notebook.")
+
+paths = {name: ROOT / path for name, path in {
+    'model': 'models/forecast.joblib', 'features': 'data/spy_features.csv',
+    'predictions': 'reports/holdout_predictions.csv',
+}.items()}
+if any(not p.exists() for p in paths.values()):
+    st.error('Training artifacts are missing. Run: python -m src.train')
+    st.stop()
+try:
+    bundle = load_bundle(str(paths['model']), paths['model'].stat().st_mtime_ns)
+    data = load_csv(str(paths['features']), paths['features'].stat().st_mtime_ns)
+    historical = load_csv(str(paths['predictions']), paths['predictions'].stat().st_mtime_ns)
+    model, meta = bundle['model'], bundle['metadata']
+    if str(data.index.max().date()) != meta['raw_end']:
+        raise ValueError('Model and feature snapshot dates disagree. Retrain all artifacts together.')
+    if data[meta['features']].isna().any().any():
+        raise ValueError('Feature snapshot contains missing model inputs.')
+except Exception as exc:
+    st.error(f'Could not load matching training artifacts: {exc}')
     st.stop()
 
-if not os.path.exists(DATA_PATH):
-    st.error(f"Data file not found at: {DATA_PATH}. Make sure you saved spy_processed.csv from the notebook.")
-    st.stop()
+age = (pd.Timestamp.now(tz='America/New_York').tz_localize(None).normalize() - data.index.max()).days
+st.caption(f"Data: {meta['raw_start']} to {meta['raw_end']} · Selected model: {meta['selected_model']} · {meta['raw_rows']:,} market sessions")
+if age > 7:
+    st.warning(f'This snapshot is {age} calendar days old. Refresh data and retrain before interpreting it as a current forecast.')
 
-model = load_model()
-df = load_data()
+st.sidebar.header('Explore forecasts')
+mode = st.sidebar.radio('View', ['Latest forecast', 'Historical holdout'])
+if mode == 'Historical holdout':
+    picked = st.sidebar.date_input('As-of date', value=historical.index.max().date(),
+                                   min_value=historical.index.min().date(), max_value=historical.index.max().date())
+    # Use only a session at or before the chosen date, never a future Monday.
+    selected = historical.index[historical.index <= pd.Timestamp(picked)][-1]
+    p_up = float(historical.loc[selected, f"{meta['selected_model']}_p_up"])
+    st.info(f"Historical evaluation: predictions were saved from a model whose training labels ended on {meta['development_label_end']}. It was not fitted on this holdout.")
+else:
+    selected = data.index.max()
+    row_input = data.loc[[selected], meta['features']]
+    p_up = float(model.predict_proba(row_input)[0, list(model.classes_).index(1)])
+    st.info(f"Latest snapshot forecast: the deployed model was refitted using outcomes known through {meta['live_label_end']}. This refitted model is used only for the latest session.")
 
-feature_cols = [
-    "SMA_10", "SMA_30", "SMA_50", "SMA_100",
-    "EMA_12", "EMA_26",
-    "MACD", "MACD_signal",
-    "RSI_14",
-    "Volatility_20", "Volatility_50",
-    "Mom_5", "Mom_10", "Mom_20",
-    "VROC_5",
-    "Volume"
-]
-
-missing_feats = [c for c in feature_cols if c not in df.columns]
-if missing_feats:
-    st.error(
-        "Your processed CSV is missing feature columns required by the model:\n\n"
-        + ", ".join(missing_feats)
-        + "\n\nFix: ensure your notebook saves the final modelling dataframe with these columns."
-    )
-    st.stop()
-
-# Drop NaNs created by rolling indicators
-df = df.dropna(subset=feature_cols + (["Close"] if "Close" in df.columns else []), how="any")
-
-# Ensure index is sorted
-df = df.sort_index()
-
-available_dates = df.index
-
-st.sidebar.header("User Inputs")
-
-investment_amount = st.sidebar.slider(
-    "Investment Amount ($)",
-    min_value=100,
-    max_value=50000,
-    value=5000,
-    step=100
-)
-
-risk_level = st.sidebar.selectbox("Risk Level", ["Low", "Moderate", "High"])
-
-# Date picker (looks much cleaner than dropdown)
-min_d = available_dates.min().date()
-max_d = available_dates.max().date()
-
-picked_date = st.sidebar.date_input(
-    "Select Date",
-    value=max_d,
-    min_value=min_d,
-    max_value=max_d
-)
-
-st.sidebar.markdown("---")
-st.sidebar.caption("SPY-only prototype (dates are constrained to available trading days).")
-st.sidebar.markdown("<div class='small-note'>Tip: For report screenshots, capture one UP case and one DOWN case.</div>", unsafe_allow_html=True)
-
-# Convert picked_date -> Timestamp at midnight
-picked_ts = pd.Timestamp(picked_date)
-
-# Snap to nearest available trading date if weekend/holiday
-nearest_idx = int(np.argmin(np.abs((available_dates - picked_ts).to_numpy())))
-selected_date = available_dates[nearest_idx]
-
-run = st.sidebar.button("Get Recommendation")
-
-
-def build_explanations(row: pd.Series):
-    reasons = []
-
-    if row["SMA_30"] > row["SMA_100"]:
-        reasons.append("Short-term trend is stronger than long-term trend (SMA 30 > SMA 100).")
-    else:
-        reasons.append("Short-term trend is weaker than long-term trend (SMA 30 ≤ SMA 100).")
-
-    if row["MACD"] > 0:
-        reasons.append("MACD is above zero, suggesting bullish momentum.")
-    else:
-        reasons.append("MACD is below zero, suggesting weak or bearish momentum.")
-
-    if row["RSI_14"] > 70:
-        reasons.append("RSI suggests overbought conditions (potential pullback risk).")
-    elif row["RSI_14"] < 30:
-        reasons.append("RSI suggests oversold conditions (potential rebound signal).")
-    else:
-        reasons.append("RSI is in a neutral range.")
-
-    if row["Mom_10"] > 0:
-        reasons.append("Recent 10-day momentum is positive.")
-    else:
-        reasons.append("Recent 10-day momentum is negative.")
-
-    if row["Volatility_20"] > row["Volatility_50"]:
-        reasons.append("Short-term volatility is elevated relative to the longer-term window.")
-    else:
-        reasons.append("Volatility appears stable relative to the longer-term window.")
-
-    return reasons
-
-left, right = st.columns([1.25, 1.0], gap="large")
-
+row = data.loc[selected]
+left, right = st.columns([1.5, 1])
 with left:
-    st.subheader("📉 Market Visualisation")
-
-    end_date = selected_date
-    recent_data = df.loc[:end_date].tail(140).copy()
-
+    st.subheader('Market history')
+    recent = data.loc[:selected].tail(180)
     fig = go.Figure()
-
-    if "Close" in recent_data.columns:
-        fig.add_trace(go.Scatter(
-            x=recent_data.index, y=recent_data["Close"],
-            mode="lines", name="Close"
-        ))
-
-    if "SMA_30" in recent_data.columns:
-        fig.add_trace(go.Scatter(
-            x=recent_data.index, y=recent_data["SMA_30"],
-            mode="lines", name="SMA 30"
-        ))
-
-    if "SMA_100" in recent_data.columns:
-        fig.add_trace(go.Scatter(
-            x=recent_data.index, y=recent_data["SMA_100"],
-            mode="lines", name="SMA 100"
-        ))
-
-    fig.update_layout(
-        height=460,
-        margin=dict(l=10, r=10, t=30, b=10),
-        template="plotly_dark",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        xaxis_title="Date",
-        yaxis_title="Price"
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    st.caption(f"Selected trading date used by the model: {selected_date.date()}")
-
+    for col, label in [('Close', 'Adjusted close'), ('SMA_30', 'SMA 30'), ('SMA_100', 'SMA 100')]:
+        fig.add_trace(go.Scatter(x=recent.index, y=recent[col], name=label))
+    fig.update_layout(height=420, margin=dict(l=10, r=10, t=15, b=10),
+                      yaxis_title='Adjusted USD', legend=dict(orientation='h'))
+    st.plotly_chart(fig, width='stretch')
+    st.caption(f'As of market close on {selected.date()}. Features include that session’s closing price and volume; this is not an intraday forecast.')
 with right:
-    st.subheader("📊 Prediction & Advice")
-
-    if not run:
-        st.info("Pick inputs on the left, then click **Get Recommendation**.")
+    st.subheader('Direction estimate')
+    a, b = st.columns(2)
+    a.metric('P(UP)', f'{p_up:.1%}')
+    b.metric('P(DOWN / flat)', f'{1-p_up:.1%}')
+    if meta['selected_model'] == 'prior_baseline':
+        st.warning('No validated timing signal. The selected baseline reports the training-period frequency of UP outcomes and does not use indicators to time the market.')
+    elif abs(p_up - .5) < .05:
+        st.warning('No clear directional signal: model estimate is close to 50%.')
     else:
-        row = df.loc[selected_date]
-        X_input = pd.DataFrame([row[feature_cols]], columns=feature_cols)
+        st.write(f"Estimated direction: **{'UP' if p_up >= .5 else 'DOWN / flat'}** over the next {meta['horizon']} trading sessions.")
+    st.caption('These are uncalibrated model estimates, not guaranteed odds or a measure of investment safety. The 5 percentage point neutral band is a display heuristic, not an optimized trading rule.')
+    if mode == 'Historical holdout':
+        actual = 'UP' if historical.loc[selected, 'Target'] == 1 else 'DOWN / flat'
+        st.write(f'Observed 10-session outcome: **{actual}**')
+    st.subheader('Indicator context')
+    st.write(f"• Trend: SMA 30 {'above' if row.SMA_30 > row.SMA_100 else 'at or below'} SMA 100.")
+    st.write(f'• RSI (14): {row.RSI_14:.1f}.')
+    st.write(f'• Previous 10-session return: {row.Mom_10:+.2%}.')
+    st.write(f'• Daily return volatility (20 sessions): {row.Volatility_20:.2%}.')
+    st.write(f'• Volume relative to 20-session average: {row.Relative_volume:.2f}×.')
+    st.caption('These describe market conditions. They do not establish why this specific model made its prediction.')
 
-        # Predict + confidence
-        if hasattr(model, "predict_proba"):
-            proba = model.predict_proba(X_input)[0]
-            prediction = int(np.argmax(proba))
-            confidence = float(np.max(proba)) * 100
-        else:
-            prediction = int(model.predict(X_input)[0])
-            confidence = None
+with st.expander('Evaluation and model selection', expanded=False):
+    table = []
+    for name, metrics in meta['holdout'].items():
+        table.append({'Model': name, 'Validation log loss': meta['validation'][name]['mean_log_loss'],
+                      'Holdout accuracy': metrics['accuracy'], 'Holdout balanced accuracy': metrics['balanced_accuracy'],
+                      'Holdout log loss': metrics['log_loss'], 'Holdout Brier score': metrics['brier']})
+    st.dataframe(pd.DataFrame(table).set_index('Model').style.format('{:.3f}'), width='stretch')
+    st.write(f"Holdout: {meta['holdout_start']} to {meta['holdout_end']}. Always-UP accuracy: {meta['always_up_holdout']['accuracy']:.1%}.")
+    st.caption('Selection uses the lowest mean log loss across four expanding development folds, with a 10-session gap. The final 20% is held out of selection. Lower log loss and Brier score are better. Overlapping target windows mean rows are dependent; these results do not establish trading profitability.')
+    st.download_button('Download historical predictions', paths['predictions'].read_bytes(), 'holdout_predictions.csv', 'text/csv')
 
-        direction = "UP" if prediction == 1 else "DOWN"
-        action = "Increase Exposure" if direction == "UP" else "Reduce / Hold"
-
-        # Compact KPI row (smaller than st.metric)
-        conf_text = f"{confidence:.1f}%" if confidence is not None else "N/A"
-
-        st.markdown(
-            f"""
-            <div class="kpi-wrap">
-              <div class="kpi">
-                <div class="kpi-label">Predicted Direction</div>
-                <div class="kpi-value">{direction}</div>
-              </div>
-              <div class="kpi">
-                <div class="kpi-label">Suggested Action</div>
-                <div class="kpi-value small">{action}</div>
-              </div>
-              <div class="kpi">
-                <div class="kpi-label">Risk Level</div>
-                <div class="kpi-value small">{risk_level}</div>
-              </div>
-              <div class="kpi">
-                <div class="kpi-label">Model Confidence</div>
-                <div class="kpi-value small">{conf_text}</div>
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-        # Recommendation (risk-aware)
-        if direction == "UP":
-            if risk_level == "High":
-                alloc_text = "a higher allocation may be considered (risk-tolerant approach)."
-            elif risk_level == "Low":
-                alloc_text = "a cautious increase or partial allocation may be appropriate."
-            else:
-                alloc_text = "a balanced allocation is recommended."
-            recommendation = (
-                f"The model predicts SPY may rise over the next 10 trading days. "
-                f"For an investment of ${investment_amount:,}, {alloc_text}"
-            )
-            st.markdown(f"<div class='good'><b>💡 Recommendation</b><br>{recommendation}</div>", unsafe_allow_html=True)
-        else:
-            recommendation = (
-                f"The model predicts SPY may not rise over the next 10 trading days. "
-                f"For an investment of ${investment_amount:,}, a reduced allocation or defensive positioning may be appropriate."
-            )
-            st.markdown(f"<div class='bad'><b>💡 Recommendation</b><br>{recommendation}</div>", unsafe_allow_html=True)
-
-        st.write("")
-
-        # Explanation
-        reasons = build_explanations(row)
-        st.markdown("<div class='neutral'><b>🔎 Explanation (Indicator-Based)</b><ul>", unsafe_allow_html=True)
-        for r in reasons:
-            st.markdown(f"<li>{r}</li>", unsafe_allow_html=True)
-        st.markdown("</ul></div>", unsafe_allow_html=True)
-
-        st.write("")
-        st.caption("Note: This prototype is an educational advisor system and does not constitute financial advice.")
+st.caption('Academic prototype for research and education. It does not assess your finances, determine suitable allocations, or provide personalized investment advice.')
