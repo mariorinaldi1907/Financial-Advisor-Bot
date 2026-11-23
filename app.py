@@ -1,5 +1,6 @@
 """Beginner-friendly local dashboard. Run: python -m streamlit run app.py."""
 import json
+from html import escape
 from pathlib import Path
 import pandas as pd
 import plotly.graph_objects as go
@@ -9,8 +10,44 @@ from src.presentation import TIMEFRAMES, outlook_summary, direction_text, plain_
 
 ROOT = Path(__file__).resolve().parent
 st.set_page_config(page_title='Market Outlook', page_icon='📈', layout='wide')
+st.html("""
+<style>
+:root { color-scheme: light; }
+.stApp { background: #f4f7fb; color: #172b43; }
+.stApp [data-testid="stHeader"] { background: rgba(244,247,251,.96); }
+.stApp [data-testid="stMainBlockContainer"] { max-width: 1200px; padding-top: 2.8rem; padding-bottom: 3rem; }
+.stApp h1, .stApp h2, .stApp h3 { color: #142d4e; letter-spacing: -.025em; }
+.stApp h1 { font-size: clamp(2rem,5vw,3rem); padding-bottom: .3rem; }
+.stApp h3 { font-size: 1.15rem; }
+.stApp [data-testid="stMarkdownContainer"], .stApp [data-testid="stWidgetLabel"], .stApp [data-testid="stMetricLabel"], .stApp [data-testid="stExpander"] summary { color: #172b43; }
+.stApp [data-testid="stCaptionContainer"], .stApp [data-testid="stCaptionContainer"] [data-testid="stMarkdownContainer"] { color: #52657b; }
+.stApp [data-baseweb="select"] > div { background: #fff; border-color: #cbd6e3; border-radius: 12px; color: #172b43; }
+.stApp [data-testid="stExpander"] { background: #fff; border: 1px solid #dde5ef; border-radius: 16px; }
+.stApp [data-testid="stMetric"] { background: #f4f7fb; border: 1px solid #e4ebf3; border-radius: 14px; padding: 16px; }
+.stApp [data-testid="stMetricValue"] { color: #173f70; font-size: 1.9rem; }
+.stApp .st-key-fund-controls, .stApp .st-key-price-card, .stApp .st-key-forecast-card { background: #fff; border: 1px solid #dde5ef; border-radius: 18px; padding: 22px; box-shadow: 0 4px 18px #17314e04; }
+.intro { color: #52657b; font-size: 1.04rem; margin: 0 0 1rem; max-width: 650px; }
+.outlook-card { --accent: #936012; --tint: #fff8e9; padding: 24px 28px; background: var(--tint); border: 1px solid #dfd5bc; border-left: 5px solid var(--accent); border-radius: 16px; margin: .2rem 0 .6rem; }
+.outlook-card.positive { --accent: #126b56; --tint: #edf9f3; border-color: #b9ddcd; }
+.outlook-card.negative { --accent: #a33d4b; --tint: #fff1f3; border-color: #edc7cd; }
+.outlook-top { display: flex; gap: 12px; align-items: center; margin-bottom: 10px; }
+.outlook-icon { display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; border-radius: 50%; background: #ffffffb3; font-size: 1.4rem; color: var(--accent); }
+.outlook-card h3 { color: var(--accent); font-size: 1.6rem; margin: 0; padding: 0; }
+.outlook-card p { color: #34465c; margin: 6px 0 0; line-height: 1.6; }
+.outlook-card .outlook-lead { color: #172b43; font-weight: 650; }
+.mini-label { color: #61728a; font-size: .78rem; font-weight: 650; margin: 0 0 5px; }
+.direction { font-size: 1.4rem; font-weight: 650; color: #183d65; margin: 0 0 2px; }
+.range-value { font-size: 1.1rem; font-weight: 650; color: #183d65; margin: 0; }
+.footer { border-top: 1px solid #dde5ef; padding-top: 18px; color: #61728a; font-size: .8rem; margin-top: 16px; }
+@media (max-width: 640px) {
+ .stApp [data-testid="stMainBlockContainer"] { padding-top: 1.7rem; }
+ .stApp .st-key-fund-controls, .stApp .st-key-price-card, .stApp .st-key-forecast-card { padding: 16px; }
+ .outlook-card { padding: 20px; }
+}
+</style>
+""")
 st.title('Market Outlook')
-st.write('Choose a fund and a timeframe. Start with the simple outlook below.')
+st.html('<p class="intro">Explore a fund. Understand the outlook. See the evidence behind it.</p>')
 
 
 @st.cache_data
@@ -33,17 +70,18 @@ if report['input_hashes'] != input_hashes():
     st.error('The forecasts are being updated. Please check back when the update is complete.')
     st.stop()
 
-st.subheader('Explore a fund')
-fund_control, time_control = st.columns(2)
-with fund_control:
-    ticker = st.selectbox('Choose a fund', list(ASSETS), format_func=lambda t: f'{t} — {ASSETS[t][0]}',
-                          help='An ETF is a fund traded on a stock exchange, often holding a basket of investments.')
-horizons = sorted(int(h) for h in report['horizons'])
-with time_control:
-    horizon = st.selectbox('Look ahead', horizons, index=horizons.index(10) if 10 in horizons else 0,
-                           format_func=lambda h: TIMEFRAMES[h],
-                           help='Trading days exclude weekends and market holidays.')
-mode = st.radio('View', ['Latest outlook', 'Past forecasts'], horizontal=True)
+with st.container(key='fund-controls'):
+    st.subheader('Explore a fund')
+    fund_control, time_control = st.columns(2)
+    with fund_control:
+        ticker = st.selectbox('Choose a fund', list(ASSETS), format_func=lambda t: f'{t} — {ASSETS[t][0]}',
+                              help='An ETF is a fund traded on a stock exchange, often holding a basket of investments.')
+    horizons = sorted(int(h) for h in report['horizons'])
+    with time_control:
+        horizon = st.selectbox('Look ahead', horizons, index=horizons.index(10) if 10 in horizons else 0,
+                               format_func=lambda h: TIMEFRAMES[h],
+                               help='Trading days exclude weekends and market holidays.')
+    mode = st.radio('View', ['Latest outlook', 'Past forecasts'], horizontal=True)
 result = report['horizons'][str(horizon)]
 metrics = result['metrics'][ticker]
 latest = next(row for row in result['latest'] if row['ticker'] == ticker)
@@ -65,30 +103,52 @@ age = (pd.Timestamp.now(tz='America/New_York').date() - as_of).days
 summary = outlook_summary(forecast['p_up'], metrics, result['bootstrap'], stale=mode == 'Latest outlook' and age > 7)
 st.subheader(f'{ticker} · {ASSETS[ticker][0]}')
 st.caption(f"{TIMEFRAMES[horizon]} · Saved market data: {as_of.strftime('%d %b %Y')}")
-message = f"### {summary['label']}\n\n**{summary['meaning']}**\n\n{summary['reason']}"
-{'Uncertain':st.warning,'Positive':st.success,'Negative':st.info}[summary['label']](message)
+symbol = {'Uncertain': '≈', 'Positive': '↗', 'Negative': '↘'}[summary['label']]
+st.html(f"""<section class="outlook-card {summary['tone']}" aria-label="Market outlook">
+<div class="outlook-top"><span class="outlook-icon" aria-hidden="true">{symbol}</span><h3>{escape(summary['label'])}</h3></div>
+<p class="outlook-lead">{escape(summary['meaning'])}</p><p>{escape(summary['reason'])}</p></section>""")
 st.caption('Positive describes the model’s price outlook. It does not mean “buy”. The app does not know your savings, debts or goals.')
 
-left,right = st.columns([1.3,1])
-with left:
-    st.subheader('How the price has moved')
+left,right = st.columns([1.6,1], gap='large')
+with left, st.container(key='price-card'):
+    st.subheader('Price history')
+    st.caption('Last 180 trading days · adjusted price in USD')
     market_path = ROOT / 'data/market_prices.csv'
     market = load_table(str(market_path), market_path.stat().st_mtime_ns)
     series = market.loc[(market.Ticker == ticker) & (market.Date <= pd.Timestamp(as_of))].tail(180)
-    chart = go.Figure(go.Scatter(x=series.Date, y=series.Close, line=dict(color='#254ca6', width=2.5), name='Past price'))
-    chart.update_layout(height=300, margin=dict(l=5,r=5,t=10,b=5), yaxis_title='Adjusted price, USD', showlegend=False)
-    st.plotly_chart(chart, width='stretch')
-    st.caption('This chart shows the past. It does not show what will happen next.')
-with right:
-    st.subheader('What the forecast suggests')
-    with st.container(border=True):
-        st.write('**Model direction**')
-        st.write(direction_text(forecast['p_up']))
-        st.caption('A model estimate. The outlook above also considers its reliability.')
-    with st.container(border=True):
-        st.write('**Possible price movement**')
-        st.write(f"From {plain_change(forecast['lower_return'])} to {plain_change(forecast['upper_return'])}")
-        st.caption('The model’s estimated range. Actual prices can move outside it.')
+    chart = go.Figure(go.Scatter(x=series.Date, y=series.Close,
+        line=dict(color='#2876c7', width=2.8), name='Past price',
+        hovertemplate='%{x|%d %b %Y}<br>$%{y:,.2f}<extra></extra>'))
+    chart.add_trace(go.Scatter(x=series.Date.tail(1), y=series.Close.tail(1),
+        mode='markers', marker=dict(size=8,color='#16776d',line=dict(color='white',width=2)),
+        hoverinfo='skip', showlegend=False))
+    chart.update_layout(height=285, margin=dict(l=0,r=12,t=12,b=0), showlegend=False,
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color='#52657b',family='Arial'), hovermode='x unified',
+        xaxis=dict(showgrid=False, zeroline=False, tickformat='%b %Y', fixedrange=True),
+        yaxis=dict(gridcolor='#edf1f6', zeroline=False, tickprefix='$', fixedrange=True))
+    st.plotly_chart(chart, width='stretch', config={'displayModeBar':False}, theme=None)
+    st.caption('Past prices help show context. They do not predict what happens next.')
+with right, st.container(key='forecast-card'):
+    st.subheader('At a glance')
+    st.html(f'<p class="mini-label">MODEL DIRECTION</p><p class="direction">{escape(direction_text(forecast["p_up"]))}</p>')
+    st.caption('An estimate of direction; the outlook above also considers reliability.')
+    st.divider()
+    st.html(f'<p class="mini-label">POSSIBLE PRICE MOVEMENT</p><p class="range-value">{escape(plain_change(forecast["lower_return"]))} to {escape(plain_change(forecast["upper_return"]))}</p>')
+    lower, upper = forecast['lower_return']*100, forecast['upper_return']*100
+    spread = max(upper-lower, 1)
+    range_chart = go.Figure(go.Scatter(x=[lower,upper],y=[0,0],mode='lines+markers',
+        line=dict(color='#2876c7',width=9), marker=dict(size=11,color='#2876c7'),
+        hovertemplate='%{x:+.1f}%<extra>Estimated range</extra>'))
+    range_chart.add_vline(x=0,line_color='#8494a7',line_dash='dot')
+    range_chart.update_layout(height=85, margin=dict(l=12,r=12,t=10,b=20),
+        paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)',showlegend=False,
+        font=dict(color='#52657b',family='Arial'),
+        xaxis=dict(range=[min(lower,0)-spread*.15,max(upper,0)+spread*.15],
+                   ticksuffix='%',zeroline=False,showgrid=False,fixedrange=True,nticks=4),
+        yaxis=dict(visible=False,range=[-1,1],fixedrange=True))
+    st.plotly_chart(range_chart,width='stretch',config={'displayModeBar':False},theme=None)
+    st.caption('Dotted line = no price change. Actual prices can move outside the blue range.')
 
 with st.expander('How reliable has it been?', expanded=True):
     a,b = st.columns(2)
@@ -131,4 +191,4 @@ with st.expander('Detailed research results (optional)'):
     st.caption('Outlook labels require a model-favoring interval, lower per-asset log loss, balanced accuracy above 50%, and an estimated UP probability of at least 60% or at most 40%. These are display rules, not an optimized trading strategy. Historical tests reuse previously inspected periods, outcomes overlap, and vendor data is not original-release vintage data.')
     st.write(f"Observed range coverage: {metrics['interval_80_coverage']:.1%}. Nominal 80% coverage is not guaranteed.")
     st.download_button('Download research predictions', predictions_path.read_bytes(), 'research_predictions.csv', 'text/csv')
-st.caption('Learning demo · Saved forecasts · No trading or personal financial assessment')
+st.html('<footer class="footer">Market Outlook &nbsp;·&nbsp; Learning demo &nbsp;·&nbsp; Saved forecasts &nbsp;·&nbsp; No personal financial assessment</footer>')
