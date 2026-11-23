@@ -135,7 +135,7 @@ with st.expander('Data, methods, and forward tracking'):
     st.caption('Environment observations are delayed by two market sessions and stale values are removed. Vendor snapshots are not original economic-release vintages. No historical news or fundamental-release archive is included.')
     ledger = ROOT / 'data/forecast_ledger.csv'
     if ledger.exists():
-        st.caption('An append-only ledger preserves the first forecasts issued for each date and horizon, including forecasts issued before later model refits. Those future outcomes can support forward evaluation as they mature; historical simulations are kept separate.')
+        st.caption('An append-only ledger preserves the first forecasts issued for each date, horizon, and model version, including forecasts issued before later model refits. Those future outcomes can support forward evaluation as they mature; historical simulations are kept separate.')
         st.download_button('Download issued forecasts', ledger.read_bytes(), 'forecast_ledger.csv', 'text/csv')
     st.download_button('Download evaluation predictions', predictions_path.read_bytes(), 'research_predictions.csv', 'text/csv')
 st.caption('Research and education. Forecasts are uncertain and do not determine suitable investments or portfolio allocations.')

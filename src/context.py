@@ -58,12 +58,12 @@ def environment_features(environment, sessions, lag=2):
 
 
 def build_panel(market_path=MARKET_PATH, environment_path=ENVIRONMENT_PATH):
-    table = pd.read_csv(market_path, parse_dates=['Date'])
+    table = pd.read_csv(market_path, parse_dates=['Date'], float_precision='round_trip')
     if table.duplicated(['Date', 'Ticker']).any():
         raise ValueError('Duplicate asset sessions in market snapshot.')
     markets = table.pivot(index='Date', columns='Ticker', values='Close').sort_index()
     sessions = markets.index
-    environment = pd.read_csv(environment_path, index_col=0, parse_dates=True)
+    environment = pd.read_csv(environment_path, index_col=0, parse_dates=True, float_precision='round_trip')
     env = environment_features(environment, sessions)
     context = build_market_context(markets[CONTEXT_ASSETS])
     spy_return = markets.SPY.pct_change(fill_method=None)
@@ -81,6 +81,10 @@ def build_panel(market_path=MARKET_PATH, environment_path=ENVIRONMENT_PATH):
         frame['Corr_SPY60'] = returns.rolling(60).corr(spy_return)
         frame['Corr_TLT60'] = returns.rolling(60).corr(tlt_return)
         frame['Beta_SPY60'] = returns.rolling(60).cov(spy_return) / spy_return.rolling(60).var().replace(0, np.nan)
+        if ticker == 'SPY':
+            frame['Corr_SPY60'], frame['Beta_SPY60'] = 1., 1.
+        if ticker == 'TLT':
+            frame['Corr_TLT60'] = 1.
         frame['Vol_regime'] = frame.Volatility_20 / returns.rolling(252).std().replace(0, np.nan)
         frame['Relative_momentum20'] = frame.Mom_20 - markets.SPY.pct_change(20, fill_method=None)
         frame['Intraday_return'] = close / raw.Open - 1
@@ -119,7 +123,10 @@ def build_panel(market_path=MARKET_PATH, environment_path=ENVIRONMENT_PATH):
     feature_cols += [c for c in panel if c.startswith(('Asset_', 'Class_', 'Past_up_rate_'))]
     # A full trailing year is required; intermediate missing inputs are handled within each fit.
     panel = panel.loc[panel.Vol_regime.notna() & panel.Mom_60.notna()]
-    return panel, feature_cols, feature_cols + list(env)
+    all_features = feature_cols + list(env)
+    # Prevent tree splits from learning floating-point cancellation artifacts.
+    panel[all_features] = panel[all_features].round(8)
+    return panel, feature_cols, all_features
 
 
 def input_hashes(market_path=MARKET_PATH, environment_path=ENVIRONMENT_PATH):

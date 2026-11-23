@@ -1,5 +1,6 @@
 """Pooled, calibrated, multi-horizon research with date-purged walk-forward tests."""
 import argparse
+import hashlib
 import json
 from pathlib import Path
 from datetime import datetime, timezone
@@ -18,7 +19,7 @@ from .context import ASSETS, HORIZONS, build_panel, input_hashes
 from .data import ROOT
 from .train import scores, PriorModel
 
-CONFIG = dict(seed=42, horizons=HORIZONS, training_years=5, calibration_sessions=126, embargo_sessions=20,
+CONFIG = dict(seed=42, feature_decimals=8, horizons=HORIZONS, training_years=5, calibration_sessions=126, embargo_sessions=20,
               cv_periods=[['2018-01-01', '2020-01-01'], ['2020-01-01', '2022-01-01'], ['2022-01-01', '2024-01-01']],
               evaluation_periods=[['2024-01-01', '2025-01-01'], ['2025-01-01', '2026-01-01'], ['2026-01-01', '2027-01-01']],
               model_selection='equal-weight asset-mean validation log loss, averaged over three temporal folds',
@@ -315,7 +316,7 @@ def evaluate_horizon(panel, market_cols, all_cols, horizon):
             lower_return=float(q[i,0]), median_return=float(q[i,1]), upper_return=float(q[i,2])))
     report['latest'], report['live_trace'] = latest_records, live_trace
     bundle = dict(classifiers=models, returns=risk, selected_model=selected, horizon=horizon,
-                  hashes=input_hashes(), features=all_cols, excluded_dates=excluded, as_of=str(as_of.date()), live_trace=live_trace)
+                  hashes=input_hashes(), features=all_cols, excluded_dates=excluded, replay_inputs=latest[all_cols].copy(), as_of=str(as_of.date()), live_trace=live_trace)
     joblib.dump(bundle, ROOT / 'models' / f'horizon_{horizon}.joblib', compress=3)
     return report, records
 
@@ -325,10 +326,13 @@ def append_forecast_ledger(latest, path=None):
     current = pd.DataFrame(latest)
     current['issued_utc'] = datetime.now(timezone.utc).isoformat()
     current['market_sha256'] = input_hashes()['market']
+    current['model_sha256'] = [hashlib.sha256((ROOT / 'models' / f'horizon_{int(h)}.joblib').read_bytes()).hexdigest() for h in current.horizon]
     if path.exists() and path.stat().st_size:
         old = pd.read_csv(path)
         # Existing forecasts are immutable: retries do not rewrite their probabilities.
-        keys = ['ticker', 'horizon', 'as_of']
+        if 'model_sha256' not in old:
+            old['model_sha256'] = 'legacy_unversioned'
+        keys = ['ticker', 'horizon', 'as_of', 'model_sha256']
         seen = set(map(tuple, old[keys].to_numpy()))
         current = current.loc[[tuple(row) not in seen for row in current[keys].to_numpy()]]
         current = pd.concat([old, current], ignore_index=True)

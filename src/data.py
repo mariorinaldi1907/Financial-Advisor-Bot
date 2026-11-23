@@ -11,7 +11,7 @@ MARKET_PATH = ROOT / 'data/market_prices.csv'
 
 
 def load_market(ticker, path=MARKET_PATH):
-    table = pd.read_csv(path, parse_dates=['Date'])
+    table = pd.read_csv(path, parse_dates=['Date'], float_precision='round_trip')
     if table.duplicated(['Date', 'Ticker']).any():
         raise ValueError('Market snapshot contains duplicate asset sessions.')
     raw = table.loc[table.Ticker == ticker].drop(columns='Ticker').set_index('Date').sort_index()

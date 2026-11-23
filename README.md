@@ -55,6 +55,7 @@ The earlier pipeline already kept logistic/Ridge preprocessing inside training p
 | Annual evaluation was pooled in the summary | Report each period and asset separately, including accuracy, balanced accuracy, log loss, Brier score, ECE, and confusion matrices. |
 | Calibration-fit diagnostics could be mistaken for evaluation | Label these as in-sample diagnostics and calculate separate out-of-sample probability scores. |
 | Previously inspected dates could be presented as a fresh holdout | Mark all historical results exploratory and keep issued forward forecasts separately. |
+| Numerical cancellation in self-correlation could affect tree splits across platforms | Use exact self-correlation/beta identities and eight-decimal model-feature precision before fitting and inference. |
 | Historical vendor corrections are not original release vintages | Disclose this source limitation; observation delays do not remove historical revisions. |
 
 The refactored training script is [`src/research.py`](src/research.py); causal feature generation is in [`src/context.py`](src/context.py).
@@ -104,10 +105,10 @@ Equal-weight averages across 22 ETFs, using the embargoed 2024–2026 evaluation
 
 | Horizon | Selected model | Accuracy | Balanced accuracy | Prior accuracy |
 | --- | --- | ---: | ---: | ---: |
-| 1 sessions | cat_market | 52.29% | 50.08% | 52.93% |
-| 5 sessions | shrink_ensemble | 55.06% | 49.50% | 55.77% |
-| 10 sessions | shrink_ensemble | 56.12% | 49.38% | 57.05% |
-| 20 sessions | cat_context | 58.12% | 51.93% | 60.08% |
+| 1 sessions | shrink_ensemble | 52.95% | 49.91% | 52.93% |
+| 5 sessions | shrink_ensemble | 55.25% | 49.63% | 55.77% |
+| 10 sessions | cat_context | 55.75% | 49.96% | 57.05% |
+| 20 sessions | hist_context | 55.38% | 48.49% | 60.08% |
 
 The selected models do not consistently outperform the priors. These results quantify the current limitation; richer inputs and more complex estimators are not assumed to improve accuracy. Expected-return forecasts are also compared against a zero-return forecast, and interval coverage is reported rather than assumed.
 
@@ -123,7 +124,7 @@ Drawdown is measured at holding-period endpoints; intraperiod drawdowns are not 
 
 ### Forward evidence
 
-`data/forecast_ledger.csv` preserves the first forecast issued for each asset/date/horizon, including versions issued before later refits. Retraining does not rewrite those probabilities. `src.forward` scores a forecast only after its future market session exists and rejects issue timestamps outside the interval between its as-of close and the next session's open. All current entries are pending at issue time. Forecast evidence is kept distinct from retrospective simulations.
+`data/forecast_ledger.csv` preserves the first forecast issued for each asset/date/horizon/model version, including versions issued before later refits. New entries record the exact model-file SHA-256; older unversioned entries are identified explicitly. Retraining does not rewrite those probabilities. `src.forward` scores a forecast only after its future market session exists and rejects issue timestamps outside the interval between its as-of close and the next session's open. All current entries are pending at issue time. Forecast evidence is kept distinct from retrospective simulations.
 
 ## Files
 

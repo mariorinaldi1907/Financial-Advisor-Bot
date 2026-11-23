@@ -41,6 +41,7 @@ class DashboardTests(unittest.TestCase):
                 imputer = bundle['classifiers']['logistic_market']['model'].steps[0][1]
                 cols = bundle['classifiers']['logistic_market']['columns']
                 np.testing.assert_allclose(imputer.statistics_,fit[cols].median().to_numpy(),rtol=1e-8,atol=1e-10)
+                pd.testing.assert_frame_equal(bundle['replay_inputs'], latest[bundle['features']],check_exact=True)
                 p = probabilities(bundle['classifiers'], latest)[bundle['selected_model']]
                 point, q = return_predictions(bundle['returns'], latest)
                 self.assertTrue(np.isfinite(q).all())
