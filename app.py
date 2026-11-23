@@ -15,17 +15,40 @@ st.html("""
 :root { color-scheme: light; }
 .stApp { background: #f4f7fb; color: #172b43; }
 .stApp [data-testid="stHeader"] { background: rgba(244,247,251,.96); }
-.stApp [data-testid="stMainBlockContainer"] { max-width: 1200px; padding-top: 2.8rem; padding-bottom: 3rem; }
+.stApp [data-testid="stMainBlockContainer"] { max-width: 1200px; padding-top: 4.5rem; padding-bottom: 3rem; }
 .stApp h1, .stApp h2, .stApp h3 { color: #142d4e; letter-spacing: -.025em; }
 .stApp h1 { font-size: clamp(2rem,5vw,3rem); padding-bottom: .3rem; }
 .stApp h3 { font-size: 1.15rem; }
+.stApp [data-testid="stVerticalBlock"] { gap: 1rem; }
 .stApp [data-testid="stMarkdownContainer"], .stApp [data-testid="stWidgetLabel"], .stApp [data-testid="stMetricLabel"], .stApp [data-testid="stExpander"] summary { color: #172b43; }
 .stApp [data-testid="stCaptionContainer"], .stApp [data-testid="stCaptionContainer"] [data-testid="stMarkdownContainer"] { color: #52657b; }
 .stApp [data-baseweb="select"] > div { background: #fff; border-color: #cbd6e3; border-radius: 12px; color: #172b43; }
+.stApp [data-testid="stExpander"] details > summary { background: #fff; color: #172b43; border-radius: 15px; }
+.stApp [data-testid="stExpander"] details > summary:hover { background: #edf3fa; color: #172b43; }
+.stApp [data-testid="stExpander"] details > summary:focus-visible { outline: 2px solid #2876c7; outline-offset: 2px; }
+.stApp [data-testid="stExpander"] details[open] > summary { border-bottom: 1px solid #dde5ef; border-radius: 15px 15px 0 0; }
+.stApp [data-testid="stTable"] { overflow-x: auto; }
+.stApp [data-testid="stTable"] table { width: 100%; font-size: .9rem; border-collapse: collapse; }
+.stApp [data-testid="stTable"] th, .stApp [data-testid="stTable"] td { color: #172b43; background: #fff; border-color: #dde5ef; padding: 10px 12px; }
+.stApp [data-testid="stTable"] thead th { background: #edf3fa; color: #254b72; }
+.stApp [data-testid="stTable"] tbody tr:nth-child(even) td, .stApp [data-testid="stTable"] tbody tr:nth-child(even) th { background: #f8fafd; }
+.stApp input, .stApp [data-baseweb="input"], .stApp [data-baseweb="base-input"] { background: #fff; color: #172b43; color-scheme: light; }
+.stApp [data-testid="stBaseButton-secondary"] { background: #fff; color: #173f70; border-color: #cbd6e3; }
+.stApp [data-testid="stAlert"] [data-testid="stMarkdownContainer"] { color: inherit; }
+.stApp [data-testid="stAlertContentInfo"] [data-testid="stMarkdownContainer"] { color: #21476f; }
+.stApp [data-testid="stAlertContentError"] [data-testid="stMarkdownContainer"] { color: #882b35; }
+.stApp button[aria-label^="Help for"] { color: #52657b; }
+.stApp [data-baseweb="select"] svg { color: #52657b; fill: currentColor; }
+.stApp label[data-baseweb="radio"] > div:first-child { background: #fff; border: 1px solid #8494a7; }
+.stApp label[data-baseweb="radio"] > div:first-child > div { background: transparent; }
+.stApp label[data-baseweb="radio"]:has(input:checked) > div:first-child { background: #16776d; border-color: #16776d; }
+.stApp label[data-baseweb="radio"]:has(input:checked) > div:first-child > div { background: #fff; }
+.stApp label[data-baseweb="radio"]:has(input:focus-visible) > div:first-child { outline: 2px solid #2876c7; outline-offset: 3px; }
 .stApp [data-testid="stExpander"] { background: #fff; border: 1px solid #dde5ef; border-radius: 16px; }
 .stApp [data-testid="stMetric"] { background: #f4f7fb; border: 1px solid #e4ebf3; border-radius: 14px; padding: 16px; }
 .stApp [data-testid="stMetricValue"] { color: #173f70; font-size: 1.9rem; }
-.stApp .st-key-fund-controls, .stApp .st-key-price-card, .stApp .st-key-forecast-card { background: #fff; border: 1px solid #dde5ef; border-radius: 18px; padding: 22px; box-shadow: 0 4px 18px #17314e04; }
+.stApp .st-key-fund-controls, .stApp .st-key-price-card, .stApp .st-key-direction-card, .stApp .st-key-range-card, .stApp .st-key-risk-card { background: #fff; border: 1px solid #dde5ef; border-radius: 18px; padding: 22px; box-shadow: 0 4px 18px #17314e04; }
+.st-key-direction-card, .st-key-range-card, .st-key-risk-card { min-height: 260px; }
 .intro { color: #52657b; font-size: 1.04rem; margin: 0 0 1rem; max-width: 650px; }
 .outlook-card { --accent: #936012; --tint: #fff8e9; padding: 24px 28px; background: var(--tint); border: 1px solid #dfd5bc; border-left: 5px solid var(--accent); border-radius: 16px; margin: .2rem 0 .6rem; }
 .outlook-card.positive { --accent: #126b56; --tint: #edf9f3; border-color: #b9ddcd; }
@@ -42,9 +65,11 @@ st.html("""
 .range-value { font-size: 1.1rem; font-weight: 650; color: #183d65; margin: 0; }
 .footer { border-top: 1px solid #dde5ef; padding-top: 18px; color: #61728a; font-size: .8rem; margin-top: 16px; }
 @media (max-width: 640px) {
- .stApp [data-testid="stMainBlockContainer"] { padding-top: 1.7rem; }
- .stApp .st-key-fund-controls, .stApp .st-key-price-card, .stApp .st-key-forecast-card { padding: 16px; }
+ .stApp [data-testid="stMainBlockContainer"] { padding-top: 4.5rem; }
+ .stApp .st-key-fund-controls, .stApp .st-key-price-card, .stApp .st-key-direction-card, .stApp .st-key-range-card, .stApp .st-key-risk-card { padding: 16px; }
  .outlook-card { padding: 20px; }
+ .st-key-direction-card, .st-key-range-card, .st-key-risk-card { min-height: 0; }
+ .stApp [data-testid="stMetricValue"] { font-size: 1.55rem; }
 }
 </style>
 """)
@@ -115,8 +140,7 @@ st.html(f"""<section class="outlook-card {summary['tone']}" aria-label="Market o
 <strong>{escape(summary['takeaway'])}</strong><p>{escape(summary['next_step'])}</p></div></section>""")
 st.caption('A model-based research takeaway, not a personal instruction to buy, hold or sell. The app does not know your savings, debts or goals.')
 
-left,right = st.columns([1.6,1], gap='large')
-with left, st.container(key='price-card'):
+with st.container(key='price-card'):
     st.subheader('Price history')
     st.caption('Last 180 trading days · adjusted price in USD')
     market_path = ROOT / 'data/market_prices.csv'
@@ -135,11 +159,12 @@ with left, st.container(key='price-card'):
         yaxis=dict(gridcolor='#edf1f6', zeroline=False, tickprefix='$', fixedrange=True))
     st.plotly_chart(chart, width='stretch', config={'displayModeBar':False}, theme=None)
     st.caption('Past prices help show context. They do not predict what happens next.')
-with right, st.container(key='forecast-card'):
-    st.subheader('At a glance')
+st.subheader('Forecast at a glance')
+direction_card, movement_card, risk_card = st.columns(3, gap='medium')
+with direction_card, st.container(key='direction-card'):
     st.html(f'<p class="mini-label">MODEL DIRECTION</p><p class="direction">{escape(direction_text(forecast["p_up"]))}</p>')
     st.caption('An estimate of direction; the outlook above also considers reliability.')
-    st.divider()
+with movement_card, st.container(key='range-card'):
     st.html(f'<p class="mini-label">POSSIBLE PRICE MOVEMENT</p><p class="range-value">{escape(plain_change(forecast["lower_return"]))} to {escape(plain_change(forecast["upper_return"]))}</p>')
     lower, upper = forecast['lower_return']*100, forecast['upper_return']*100
     spread = max(upper-lower, 1)
@@ -155,13 +180,14 @@ with right, st.container(key='forecast-card'):
         yaxis=dict(visible=False,range=[-1,1],fixedrange=True))
     st.plotly_chart(range_chart,width='stretch',config={'displayModeBar':False},theme=None)
     st.caption('Dotted line = no price change. Actual prices can move outside the blue range.')
+with risk_card, st.container(key='risk-card'):
     if 'downside_p' in forecast:
-        st.divider()
-        st.html(f'<p class="mini-label">LARGER-LOSS ESTIMATE</p><p class="range-value">{forecast["downside_p"]:.0%} estimated probability</p>')
-        st.caption(f'A price fall greater than {abs(forecast["downside_threshold"]):.1%} over this timeframe. The threshold adjusts to recent volatility.')
-        if result.get('downside', {}).get('selected_model') == 'prior':
-            st.caption('Based on historical frequency. No more complex risk model passed the validation checks.')
-        st.caption('This estimate can be wrong. See past risk performance in the optional research results.')
+        st.html(f'<p class="mini-label">LARGER-LOSS ESTIMATE</p><p class="direction">{forecast["downside_p"]:.0%}</p>')
+        st.caption(f'Estimated probability of a fall greater than {abs(forecast["downside_threshold"]):.1%} over this timeframe.')
+        source = 'Based on historical frequency.' if result.get('downside', {}).get('selected_model') == 'prior' else 'Based on the risk model.'
+        st.caption(f'{source} This estimate can be wrong; the loss threshold adjusts to recent volatility.')
+    else:
+        st.write('Risk estimate unavailable for this forecast.')
 
 
 with st.expander('How reliable has it been?', expanded=True):
@@ -176,7 +202,7 @@ with st.expander('How reliable has it been?', expanded=True):
         comparison = period['models']['prior'][ticker]
         rows.append({'Year':period['start'][:4], 'Model correct':f"{m['accuracy']:.0%}",
                      'Simple comparison':f"{comparison['accuracy']:.0%}"})
-    st.dataframe(pd.DataFrame(rows).set_index('Year'), width='stretch')
+    st.table(pd.DataFrame(rows).set_index('Year'))
 if mode == 'Past forecasts':
     st.info(f"What actually happened: the adjusted price was {plain_change(float(stored.Forward_return))} over {horizon} trading days.")
 
@@ -194,13 +220,13 @@ with st.expander('Detailed research results (optional)'):
     st.caption('Probabilities are estimates. Historical labels are retrospective explanations, not original investment signals. The return and direction models are separate.')
     rows = [{'Model':n, 'Validation log loss':v, 'Evaluation log loss':result['candidates'][n]['mean_asset_log_loss']}
             for n,v in result['validation_log_loss'].items()]
-    st.dataframe(pd.DataFrame(rows).set_index('Model').style.format('{:.4f}'), width='stretch')
+    st.table(pd.DataFrame(rows).set_index('Model').style.format('{:.4f}'))
     rows = []
     for period in result['evaluation_period_metrics']:
         m = period['models'][result['selected_model']][ticker]
         rows.append({'Period':period['start']+' to '+period['end'], 'Accuracy':m['accuracy'],
                      'Balanced accuracy':m['balanced_accuracy'], 'Log loss':m['log_loss'], 'Brier':m['brier'], 'ECE':m['ece']})
-    st.dataframe(pd.DataFrame(rows).set_index('Period').style.format('{:.4f}'), width='stretch')
+    st.table(pd.DataFrame(rows).set_index('Period').style.format('{:.4f}'))
     lo,hi = result['bootstrap']['bootstrap_95_interval']
     st.write(f"Exploratory date-block interval for model-minus-prior log loss: [{lo:+.4f}, {hi:+.4f}].")
     st.caption('Outlook labels require a model-favoring interval, lower per-asset log loss, balanced accuracy above 50%, and an estimated UP probability of at least 60% or at most 40%. These are display rules, not an optimized trading strategy. Historical tests reuse previously inspected periods, outcomes overlap, and vendor data is not original-release vintage data.')
@@ -208,7 +234,9 @@ with st.expander('Detailed research results (optional)'):
     if 'promotion' in result:
         st.write('**Model selection checks**')
         st.caption('A candidate needs at least two validation-fold wins, average log-loss improvement of 0.0005, and no fold deterioration greater than 0.002. Otherwise the historical baseline is used. Evaluation results do not select the model.')
-        st.dataframe(pd.DataFrame(result['promotion']).T, width='stretch')
+        decisions = [dict(Model=name, **{f'Fold {i+1} gain':f'{gain:+.4f}' for i,gain in enumerate(decision['fold_gains'])},
+                          Eligible='Yes' if decision['eligible'] else 'No') for name,decision in result['promotion'].items()]
+        st.table(pd.DataFrame(decisions).set_index('Model'))
     if 'downside' in result:
         risk_metrics = result['downside']['metrics'][ticker]
         risk_baseline = result['downside']['baseline_metrics'][ticker]
