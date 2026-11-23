@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from streamlit.testing.v1 import AppTest
 from src.context import ASSETS, HORIZONS, build_panel, input_hashes
-from src.research import labeled_panel, probabilities, return_predictions
+from src.research import labeled_panel, probabilities, return_predictions, select_candidate, downside_probabilities
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -25,7 +25,8 @@ class DashboardTests(unittest.TestCase):
         for h in HORIZONS:
             with self.subTest(horizon=h):
                 run = self.report['horizons'][str(h)]
-                self.assertEqual(run['selected_model'], min(run['validation_log_loss'], key=run['validation_log_loss'].get))
+                self.assertEqual(run['selected_model'], select_candidate(run['validation_folds'])[0])
+                self.assertEqual(run['downside']['selected_model'], select_candidate(run['downside']['validation_folds'])[0])
                 for trace in run['validation_traces'] + run['evaluation_traces'] + [run['live_trace']]:
                     self.assertLess(trace['fit_label_end'], trace['calibration_start'])
                     self.assertLess(trace['calibration_label_end'], trace['evaluation_start'])
@@ -43,12 +44,15 @@ class DashboardTests(unittest.TestCase):
                 np.testing.assert_allclose(imputer.statistics_,fit[cols].median().to_numpy(),rtol=1e-8,atol=1e-10)
                 pd.testing.assert_frame_equal(bundle['replay_inputs'], latest[bundle['features']],check_exact=True)
                 p = probabilities(bundle['classifiers'], latest)[bundle['selected_model']]
+                down_p = downside_probabilities(bundle['downside_models'], latest)[bundle['downside_selected']]
                 point, q = return_predictions(bundle['returns'], latest)
                 self.assertTrue(np.isfinite(q).all())
                 self.assertTrue((q[:,0] <= q[:,1]).all() and (q[:,1] <= q[:,2]).all())
                 for i, asset in enumerate(latest.Ticker):
                     saved = next(r for r in run['latest'] if r['ticker'] == asset)
                     self.assertAlmostEqual(saved['p_up'], float(p[i]), places=6)
+                    self.assertAlmostEqual(saved['downside_p'], float(down_p[i]), places=6)
+                    self.assertAlmostEqual(saved['downside_threshold'], -float(latest.Scale.iloc[i]), places=8)
                     self.assertAlmostEqual(saved['expected_return'], float(point[i]), places=6)
                     records = self.predictions.loc[(self.predictions.Ticker == asset) & (self.predictions.horizon == h)]
                     labels = data.loc[data.Ticker == asset].loc[records.Date]

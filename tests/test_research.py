@@ -4,9 +4,9 @@ import unittest
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from src.context import environment_features, build_panel, HORIZONS
-from src.research import temporal_parts, labeled_panel, validation_slice, conformal_width, execution_study, append_forecast_ledger, walk_forward_folds, CONFIG
-from src.forward import resolve_forecasts
+from src.context import environment_features, build_panel, HORIZONS, macro_features, market_conditions
+from src.research import temporal_parts, labeled_panel, validation_slice, conformal_width, execution_study, append_forecast_ledger, walk_forward_folds, CONFIG, select_candidate, feature_groups
+from src.forward import resolve_forecasts, summarize_forecasts
 from src.data import raw_digest
 
 
@@ -104,3 +104,58 @@ class ResearchTests(unittest.TestCase):
             self.assertEqual(len(after),1)
             self.assertEqual(after.loc[0,'p_up'],.6)
             self.assertEqual(after.loc[0,'issued_utc'],original.loc[0,'issued_utc'])
+
+    def test_promotion_requires_consistency_and_material_gain(self):
+        losses = {'prior':[.69,.69,.69], 'one_lucky_fold':[.60,.70,.70],
+                  'negligible':[.6899]*3, 'stable':[.688,.688,.689]}
+        selected, diagnostics = select_candidate(losses)
+        self.assertEqual(selected,'stable')
+        self.assertFalse(diagnostics['one_lucky_fold']['eligible'])
+        self.assertFalse(diagnostics['negligible']['eligible'])
+        self.assertEqual(select_candidate({'prior':[.69]*3,'worse':[.7]*3})[0],'prior')
+        with self.assertRaises(ValueError):
+            select_candidate({'prior':[.69]*3,'broken':[.68,float('nan'),.68]})
+
+    def test_macro_vintages_are_joined_by_availability_not_observation(self):
+        rows = [dict(Date=available,indicator=name,vintage_month=vintage,observation_date=observation,
+                     growth_1m=.01,growth_12m=.03)
+                for name in ['inflation','employment']
+                for available,vintage,observation in [('2020-02-01','2020-01-01','2019-12-01'),
+                                                        ('2020-03-01','2020-02-01','2020-01-01')]]
+        vintages=pd.DataFrame(rows)
+        sessions=pd.bdate_range('2020-01-01','2020-06-01')
+        original=macro_features(vintages,sessions)
+        self.assertTrue(original.loc[:'2020-01-31','Macro_inflation_growth_1m'].isna().all())
+        self.assertEqual(original.loc['2020-02-03','Macro_inflation_growth_1m'],.01)
+        vintages.loc[vintages.Date == '2020-03-01','growth_1m'] = 9
+        altered=macro_features(vintages,sessions)
+        pd.testing.assert_frame_equal(original.loc[:'2020-02-28'],altered.loc[:'2020-02-28'])
+        self.assertTrue(altered.loc['2020-06-01'].filter(like='growth').isna().all())
+        vintages.loc[0,'Date']='2020-01-15'
+        with self.assertRaises(ValueError):
+            macro_features(vintages,sessions)
+
+    def test_forward_summary_excludes_pending_and_pairs_comparisons(self):
+        ledger=pd.DataFrame([
+            dict(status='evaluated',horizon=10,model_sha256='a',outcome_date='2026-11-20',
+                 actual_up=1,p_up=.8,prior_p_up=.5,realized_return=.03,lower_return=-.02,upper_return=.04,
+                 downside_p=.2,downside_prior_p=.3,downside_threshold=-.02),
+            dict(status='pending',horizon=10,model_sha256='a',p_up=.1),
+            dict(status='ineligible_issue_time',horizon=10,model_sha256='a',p_up=.9)])
+        summary=summarize_forecasts(ledger)
+        self.assertEqual(len(summary['groups']),1)
+        group=summary['groups'][0]
+        self.assertEqual(group['rows'],1)
+        self.assertEqual(group['interval']['coverage'],1.)
+        self.assertAlmostEqual(group['direction']['brier'],.04)
+        self.assertAlmostEqual(group['downside']['model']['brier'],.04)
+        self.assertEqual(group['baseline_comparison']['rows'],1)
+
+    def test_feature_ablation_sets_keep_baselines_and_exclude_targets(self):
+        _, market, all_cols=build_panel()
+        groups=feature_groups(market,all_cols)
+        self.assertLess(len(groups['core']),len(market))
+        self.assertEqual(set(groups['credit'])-set(groups['core']),{c for c in all_cols if c.startswith('Credit_')})
+        for columns in groups.values():
+            self.assertTrue(any(c.startswith('Asset_') for c in columns))
+            self.assertFalse(any(c.startswith(('Forward_', 'Label_', 'Scale_')) for c in columns))

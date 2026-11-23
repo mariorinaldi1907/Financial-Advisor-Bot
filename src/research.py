@@ -22,12 +22,80 @@ from .train import scores, PriorModel
 CONFIG = dict(seed=42, feature_decimals=8, horizons=HORIZONS, training_years=5, calibration_sessions=126, embargo_sessions=20,
               cv_periods=[['2018-01-01', '2020-01-01'], ['2020-01-01', '2022-01-01'], ['2022-01-01', '2024-01-01']],
               evaluation_periods=[['2024-01-01', '2025-01-01'], ['2025-01-01', '2026-01-01'], ['2026-01-01', '2027-01-01']],
-              model_selection='equal-weight asset-mean validation log loss, averaged over three temporal folds',
+              model_selection='baseline promotion gate using only three validation folds; minimum two wins, mean gain >= 0.0005, no fold loss deterioration > 0.002',
+              promotion_min_gain=.0005, promotion_max_fold_harm=.002, promotion_min_wins=2,
+              downside_event='forward return below minus one trailing 20-session volatility scaled by sqrt(horizon)',
               environment_lag_sessions=2, trade_probability=.6, one_way_cost_bps=5,
               bootstrap_blocks=20, bootstrap_draws=400,
               catboost=dict(iterations=240, depth=5, learning_rate=.03, l2_leaf_reg=20),
               hist=dict(max_iter=160, max_leaf_nodes=15, min_samples_leaf=100, l2_regularization=20))
-FAMILIES = ['prior', 'logistic_market', 'cat_market', 'cat_context', 'hist_context', 'ensemble', 'shrink_ensemble']
+FAMILIES = ['prior', 'logistic_market', 'cat_market', 'cat_context', 'hist_context', 'ensemble', 'shrink_ensemble', 'logistic_core', 'logistic_credit', 'logistic_breadth', 'logistic_macro', 'logistic_environment', 'cat_core']
+
+
+def feature_groups(market_cols, all_cols):
+    core_names = ['Return_1', 'Mom_20', 'Mom_60', 'SMA_gap_50', 'Drawdown_60',
+                  'Vol_regime', 'ATR_pct', 'Relative_volume']
+    core = [c for c in market_cols if c in core_names or c.startswith(('Asset_', 'Past_up_rate_'))]
+    return dict(core=core,
+        credit=core + [c for c in all_cols if c.startswith('Credit_')],
+        breadth=core + [c for c in all_cols if c.startswith('Breadth_')],
+        macro=core + [c for c in all_cols if c.startswith('Macro_')],
+        environment=core + [c for c in all_cols if c.startswith('Env_')])
+
+
+def select_candidate(folds):
+    """Only validation inputs: evaluation outcomes cannot influence promotion."""
+    prior = np.asarray(folds['prior'], dtype=float)
+    if prior.shape != (3,) or not np.isfinite(prior).all():
+        raise ValueError('Exactly three finite validation folds are required.')
+    diagnostics, eligible = {}, []
+    for name, values in folds.items():
+        loss = np.asarray(values, dtype=float)
+        if loss.shape != prior.shape or not np.isfinite(loss).all():
+            raise ValueError('Candidate validation folds must be finite and aligned.')
+        gains = prior - loss
+        passed = (name != 'prior' and (gains > 0).sum() >= CONFIG['promotion_min_wins'] and
+                  gains.mean() >= CONFIG['promotion_min_gain'] and
+                  gains.min() >= -CONFIG['promotion_max_fold_harm'])
+        diagnostics[name] = dict(fold_gains=gains.tolist(), mean_gain=float(gains.mean()),
+                                 winning_folds=int((gains > 0).sum()), eligible=bool(passed))
+        if passed:
+            eligible.append(name)
+    selected = min(eligible, key=lambda n: np.mean(folds[n])) if eligible else 'prior'
+    return selected, diagnostics
+
+
+def fit_downside(fit, calibration, known, columns):
+    def target(frame):
+        return (frame.Forward_return < -frame.Scale).astype(int)
+    prior = PriorModel().fit(known[columns], target(known))
+    model = make_pipeline(SimpleImputer(strategy='median', add_indicator=True), StandardScaler(),
+                          LogisticRegression(C=.01, max_iter=2000, random_state=42))
+    model.fit(fit[columns], target(fit))
+    p = model.predict_proba(calibration[columns])[:, 1]
+    calibrator = LogisticRegression(C=.1, max_iter=1000, random_state=42).fit(logit(p), target(calibration))
+    return dict(prior=dict(model=prior, columns=columns, calibrator=None),
+                logistic=dict(model=model, columns=columns, calibrator=calibrator))
+
+
+def downside_probabilities(models, frame):
+    output = {}
+    for name, bundle in models.items():
+        p = bundle['model'].predict_proba(frame[bundle['columns']])[:, 1]
+        if bundle['calibrator'] is not None:
+            p = bundle['calibrator'].predict_proba(logit(p))[:, 1]
+        output[name] = np.clip(p, 1e-6, 1-1e-6)
+    return output
+
+
+def downside_metrics(frame, probabilities):
+    target_frame = frame.copy()
+    target_frame['Target'] = (frame.Forward_return < -frame.Scale).astype(int)
+    metrics = metrics_by_asset(target_frame, probabilities)
+    for ticker, values in metrics.items():
+        if target_frame.loc[target_frame.Ticker == ticker, 'Target'].nunique() < 2:
+            values['balanced_accuracy'] = None
+    return metrics
 
 
 def labeled_panel(panel, horizon):
@@ -118,7 +186,7 @@ def fit_classifiers(data, boundary, market_cols, all_cols, excluded_dates=()):
     models = {'prior': dict(model=prior, columns=market_cols, calibrator=None)}
     specifications = {
         'logistic_market': (make_pipeline(SimpleImputer(strategy='median', add_indicator=True), StandardScaler(),
-                                         LogisticRegression(C=.01, max_iter=2000)), market_cols),
+                                         LogisticRegression(C=.01, max_iter=2000, random_state=42)), market_cols),
         'cat_market': (CatBoostClassifier(**CONFIG['catboost'], loss_function='Logloss',
                         random_seed=42, verbose=False, allow_writing_files=False, thread_count=4), market_cols),
         'cat_context': (CatBoostClassifier(**CONFIG['catboost'], loss_function='Logloss',
@@ -127,6 +195,13 @@ def fit_classifiers(data, boundary, market_cols, all_cols, excluded_dates=()):
         'hist_context': (HistGradientBoostingClassifier(**CONFIG['hist'], learning_rate=.04,
                                                         early_stopping=False, random_state=42), all_cols),
     }
+    groups = feature_groups(market_cols, all_cols)
+    for group, columns in groups.items():
+        specifications['logistic_' + group] = (make_pipeline(
+            SimpleImputer(strategy='median', add_indicator=True), StandardScaler(),
+            LogisticRegression(C=.01, max_iter=2000, random_state=42)), columns)
+    specifications['cat_core'] = (CatBoostClassifier(**CONFIG['catboost'], loss_function='Logloss',
+        random_seed=42, verbose=False, allow_writing_files=False, thread_count=4), groups['core'])
     calibration_scores = {}
     for name, (model, columns) in specifications.items():
         model.fit(fit[columns], fit.Target.astype(int))
@@ -240,10 +315,15 @@ def evaluate_horizon(panel, market_cols, all_cols, horizon):
     data = labeled_panel(panel, horizon)
     validation = {name: [] for name in FAMILIES}
     traces, fold_metrics = [], []
+    downside_validation = {name: [] for name in ['prior', 'logistic']}
     excluded, next_allowed = pd.DatetimeIndex([]), None
     for validation_frame, start, end, excluded, embargo, following, next_allowed in walk_forward_folds(data, CONFIG['cv_periods']):
-        models, trace, _, _ = fit_classifiers(data, start, market_cols, all_cols, excluded)
+        models, trace, fit, calibration = fit_classifiers(data, start, market_cols, all_cols, excluded)
         p = probabilities(models, validation_frame)
+        down_models = fit_downside(fit, calibration, pd.concat([fit, calibration]), feature_groups(market_cols, all_cols)['macro'])
+        down_p = downside_probabilities(down_models, validation_frame)
+        for name, estimates in down_p.items():
+            downside_validation[name].append(float(np.mean([m['log_loss'] for m in downside_metrics(validation_frame, estimates).values()])))
         for name in FAMILIES:
             validation[name].append(mean_asset_loss(validation_frame, p[name]))
         trace.update(validation_end=str(validation_frame.index.max().date()), validation_last_label_end=str(validation_frame.Label_end.max().date()), period_end=end, post_validation_embargo=embargo)
@@ -251,17 +331,23 @@ def evaluate_horizon(panel, market_cols, all_cols, horizon):
         traces.append(trace)
         print(f'h={horizon}: validation {start}: ' + str({n:round(validation[n][-1],4) for n in FAMILIES}), flush=True)
     means = {name:float(np.mean(values)) for name,values in validation.items()}
-    selected = min(means, key=means.get)
+    selected, promotion = select_candidate(validation)
+    downside_selected, downside_promotion = select_candidate(downside_validation)
     excluded = excluded.union(following)
     records, evaluation_traces, period_metrics = [], [], []
     comparisons = {name: [] for name in FAMILIES}
     for frame, start, end, excluded, embargo, following, next_allowed in walk_forward_folds(data, CONFIG['evaluation_periods'], excluded, next_allowed):
         models, trace, fit, calibration = fit_classifiers(data, start, market_cols, all_cols, excluded)
         risk = fit_returns(fit, calibration, all_cols)
+        down_models = fit_downside(fit, calibration, pd.concat([fit, calibration]), feature_groups(market_cols, all_cols)['macro'])
+        down_p = downside_probabilities(down_models, frame)
         p, raw = probabilities(models, frame), probabilities(models, frame, raw=True)
         point, q = return_predictions(risk, frame)
         record = frame[['Ticker', 'Target', 'Forward_return', 'Label_end']].copy()
         record['horizon'], record['model'] = horizon, selected
+        record['Scale'] = frame.Scale
+        record['downside_p'], record['downside_prior_p'] = down_p[downside_selected], down_p['prior']
+        record['downside_threshold'] = -frame.Scale
         record['p_up'], record['raw_p_up'], record['prior_p_up'] = p[selected], raw[selected], p['prior']
         record['expected_return'], record['lower_return'], record['median_return'], record['upper_return'] = point, q[:,0], q[:,1], q[:,2]
         record['entry_open'], record['exit_open'] = frame[f'Entry_open_{horizon}'], frame[f'Exit_open_{horizon}']
@@ -272,7 +358,8 @@ def evaluate_horizon(panel, market_cols, all_cols, horizon):
         trace.update(validation_end=str(frame.index.max().date()), validation_last_label_end=str(frame.Label_end.max().date()), period_end=end, post_validation_embargo=embargo)
         period_metrics.append(dict(start=str(start.date()), end=end, model=selected,
             models={n:metrics_by_asset(frame,p[n]) for n in FAMILIES},
-            mean_asset_log_loss={n:mean_asset_loss(frame,p[n]) for n in FAMILIES}))
+            mean_asset_log_loss={n:mean_asset_loss(frame,p[n]) for n in FAMILIES},
+            downside={n:downside_metrics(frame, estimates) for n,estimates in down_p.items()}))
         evaluation_traces.append(trace)
         print(f'h={horizon}: evaluated {start}; selected={selected}', flush=True)
     records = pd.concat(records).sort_index(kind='stable')
@@ -296,6 +383,10 @@ def evaluate_horizon(panel, market_cols, all_cols, horizon):
         f = pd.concat(blocks)
         all_comparisons[name] = dict(mean_asset_log_loss=mean_asset_loss(f, f.probability), by_asset=metrics_by_asset(f, f.probability))
     report = dict(horizon=horizon, selected_model=selected, validation_log_loss=means,
+                  promotion=promotion, feature_groups=feature_groups(market_cols, all_cols),
+                  downside=dict(selected_model=downside_selected, validation_folds=downside_validation,
+                      promotion=downside_promotion, metrics=downside_metrics(records, records.downside_p),
+                      baseline_metrics=downside_metrics(records, records.downside_prior_p)),
                   validation_folds=validation, validation_traces=traces, validation_period_metrics=fold_metrics,
                   evaluation_traces=evaluation_traces, evaluation_period_metrics=period_metrics,
                   test_start=str(records.index.min().date()), test_end=str(records.index.max().date()),
@@ -306,16 +397,20 @@ def evaluate_horizon(panel, market_cols, all_cols, horizon):
     excluded = excluded.union(following)
     models, live_trace, fit, calibration = fit_classifiers(data, as_of + pd.Timedelta(days=1), market_cols, all_cols, excluded)
     risk = fit_returns(fit, calibration, all_cols)
+    down_models = fit_downside(fit, calibration, pd.concat([fit, calibration]), feature_groups(market_cols, all_cols)['macro'])
     latest = data.loc[data.index == as_of]
+    down_p = downside_probabilities(down_models, latest)
     p = probabilities(models, latest)
     point, q = return_predictions(risk, latest)
     latest_records = []
     for i,(_, row) in enumerate(latest.iterrows()):
         latest_records.append(dict(ticker=row.Ticker, horizon=horizon, as_of=str(as_of.date()),
-            model=selected, p_up=float(p[selected][i]), expected_return=float(point[i]),
+            model=selected, p_up=float(p[selected][i]), prior_p_up=float(p['prior'][i]),
+            downside_p=float(down_p[downside_selected][i]), downside_prior_p=float(down_p['prior'][i]),
+            downside_threshold=float(-row.Scale), expected_return=float(point[i]),
             lower_return=float(q[i,0]), median_return=float(q[i,1]), upper_return=float(q[i,2])))
     report['latest'], report['live_trace'] = latest_records, live_trace
-    bundle = dict(classifiers=models, returns=risk, selected_model=selected, horizon=horizon,
+    bundle = dict(classifiers=models, returns=risk, downside_models=down_models, downside_selected=downside_selected, selected_model=selected, horizon=horizon,
                   hashes=input_hashes(), features=all_cols, excluded_dates=excluded, replay_inputs=latest[all_cols].copy(), as_of=str(as_of.date()), live_trace=live_trace)
     joblib.dump(bundle, ROOT / 'models' / f'horizon_{horizon}.joblib', compress=3)
     return report, records
@@ -361,20 +456,23 @@ def run(horizons=HORIZONS):
             else:
                 saved = record
             saved.sort_values(['horizon', 'Ticker'], kind='stable').to_csv(prediction_path, index_label='Date')
-            output = dict(schema_version=2, created_utc=datetime.now(timezone.utc).isoformat(), config=CONFIG,
+            output = dict(schema_version=3, created_utc=datetime.now(timezone.utc).isoformat(), config=CONFIG,
                           assets={t:dict(name=n, group=g) for t,(n,g) in ASSETS.items()},
                           input_hashes=input_hashes(), feature_counts=dict(market=len(market_cols), with_environment=len(all_cols)),
-                          environment_source='Yahoo VIX and Treasury yield indices, as reported; delayed two market sessions.',
-                          environment_vintage_policy='Vendor snapshots, not original historical release vintages.',
+                          environment_source='Yahoo VIX and Treasury yield indices, delayed two market sessions; Philadelphia Fed monthly CPI and employment vintages, available after vintage month-end.',
+                          environment_vintage_policy='Yahoo market proxies remain revised vendor snapshots. Macro growth uses values within each Philadelphia Fed historical vintage; no most-recent revision column. Monthly vintage is introduced on the first day of the following month.',
                           horizons=results, caveats=[
                               'All results are exploratory retrospective research; previous experiments inspected overlapping dates.',
                               'Asset rows are correlated and multi-session target windows overlap.',
                               'Calibration and conformal adjustments use earlier dates; nominal coverage is not guaranteed under market dependence.',
                               'Execution assumes separate holding-window round trips at next adjusted open, 5 bps each way, cash gaps earn zero, no market impact; drawdown is measured only at holding-period endpoints.',
-                              'No paid economic-release vintages, historical news archive, live brokerage, or paid cloud service is included.'])
+                              'Macro inputs use free monthly vintages with conservative month-end availability, not exact release-day surprises. No historical news archive, live brokerage, or paid cloud service is included.'])
             path.write_text(json.dumps(output, indent=2, allow_nan=False) + '\n')
             append_forecast_ledger(report['latest'])
             print(f'Completed horizon {horizon}: {report["selected_model"]}', flush=True)
+
+    from .forward import update_forward_evaluation
+    update_forward_evaluation()
 
 
 if __name__ == '__main__':

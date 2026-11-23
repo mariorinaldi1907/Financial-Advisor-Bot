@@ -6,6 +6,7 @@ import pandas as pd
 from .features import CORE_FEATURES, EXTRA_FEATURES, build_features, build_market_context
 from .data import ROOT, MARKET_PATH
 
+MACRO_PATH = ROOT / 'data/macro_vintages.csv'
 ENVIRONMENT_PATH = ROOT / 'data/environment.csv'
 HORIZONS = [1, 5, 10, 20]
 ASSETS = {
@@ -57,7 +58,48 @@ def environment_features(environment, sessions, lag=2):
     return result.drop(columns=levels)
 
 
-def build_panel(market_path=MARKET_PATH, environment_path=ENVIRONMENT_PATH):
+def macro_features(vintages, sessions):
+    """Use monthly historical vintages only after their entire vintage month ends."""
+    vintages = vintages.copy()
+    for column in ['Date', 'vintage_month', 'observation_date']:
+        vintages[column] = pd.to_datetime(vintages[column], errors='raise')
+    if vintages.duplicated(['Date', 'indicator']).any():
+        raise ValueError('Duplicate macro vintage availability dates.')
+    expected = vintages.vintage_month + pd.offsets.MonthBegin(1)
+    if not (vintages.Date == expected).all() or (vintages.observation_date > vintages.vintage_month).any():
+        raise ValueError('Macro availability precedes its conservative vintage cutoff.')
+    result = pd.DataFrame(index=sessions)
+    for name in ['inflation', 'employment']:
+        rows = vintages.loc[vintages.indicator == name].sort_values('Date').set_index('Date')
+        if rows.empty:
+            raise ValueError(f'Missing macro indicator: {name}')
+        aligned = rows.reindex(sessions, method='ffill')
+        availability = pd.Series(rows.index, index=rows.index).reindex(sessions, method='ffill')
+        age = (pd.Series(sessions, index=sessions) - availability).dt.days
+        for column in ['growth_1m', 'growth_12m']:
+            result[f'Macro_{name}_{column}'] = aligned[column].where(age <= 62)
+        result[f'Macro_{name}_age'] = age.clip(upper=63)
+    return result
+
+
+def market_conditions(markets):
+    """Credit appetite proxies and breadth of this fixed, disclosed sector universe."""
+    result = pd.DataFrame(index=markets.index)
+    ratio = markets.HYG / markets.LQD
+    result['Credit_relative_return20'] = ratio.pct_change(20, fill_method=None)
+    result['Credit_relative_return60'] = ratio.pct_change(60, fill_method=None)
+    past = ratio.shift(1).rolling(252, min_periods=63)
+    result['Credit_relative_z252'] = (ratio - past.mean()) / past.std().replace(0, np.nan)
+    sectors = markets[['XLF','XLK','XLE','XLV','XLI','XLU','XLP','XLY','XLB']]
+    available = sectors.notna() & sectors.shift(20).notna()
+    result['Breadth_positive20'] = (sectors.pct_change(20, fill_method=None) > 0).where(available).mean(axis=1)
+    average = sectors.rolling(50).mean()
+    result['Breadth_above_average50'] = (sectors > average).where(average.notna()).mean(axis=1)
+    result['Breadth_dispersion20'] = sectors.pct_change(20, fill_method=None).std(axis=1)
+    return result
+
+
+def build_panel(market_path=MARKET_PATH, environment_path=ENVIRONMENT_PATH, macro_path=MACRO_PATH):
     table = pd.read_csv(market_path, parse_dates=['Date'], float_precision='round_trip')
     if table.duplicated(['Date', 'Ticker']).any():
         raise ValueError('Duplicate asset sessions in market snapshot.')
@@ -65,6 +107,8 @@ def build_panel(market_path=MARKET_PATH, environment_path=ENVIRONMENT_PATH):
     sessions = markets.index
     environment = pd.read_csv(environment_path, index_col=0, parse_dates=True, float_precision='round_trip')
     env = environment_features(environment, sessions)
+    macro = macro_features(pd.read_csv(macro_path, float_precision='round_trip'), sessions)
+    conditions = market_conditions(markets)
     context = build_market_context(markets[CONTEXT_ASSETS])
     spy_return = markets.SPY.pct_change(fill_method=None)
     tlt_return = markets.TLT.pct_change(fill_method=None)
@@ -76,7 +120,7 @@ def build_panel(market_path=MARKET_PATH, environment_path=ENVIRONMENT_PATH):
         expected = sessions[(sessions >= raw.index.min()) & (sessions <= raw.index.max())]
         if not expected.equals(raw.index):
             raise ValueError(f'{ticker} has missing market sessions.')
-        frame = build_features(raw).join(context).join(env)
+        frame = build_features(raw).join(context).join(env).join(macro).join(conditions)
         close, returns = raw.Close, raw.Close.pct_change(fill_method=None)
         frame['Corr_SPY60'] = returns.rolling(60).corr(spy_return)
         frame['Corr_TLT60'] = returns.rolling(60).corr(tlt_return)
@@ -120,15 +164,16 @@ def build_panel(market_path=MARKET_PATH, environment_path=ENVIRONMENT_PATH):
                     'Weekday_sin', 'Weekday_cos', 'Month_sin', 'Month_cos', 'Cross_rank_momentum20',
                     'Volatility50_relative', 'Volatility_log_change20']
     feature_cols = [c for c in CORE_FEATURES if c not in ['Volatility_20', 'Volatility_50']] + EXTRA_FEATURES + list(context) + market_extra
+    feature_cols += list(conditions)
     feature_cols += [c for c in panel if c.startswith(('Asset_', 'Class_', 'Past_up_rate_'))]
     # A full trailing year is required; intermediate missing inputs are handled within each fit.
     panel = panel.loc[panel.Vol_regime.notna() & panel.Mom_60.notna()]
-    all_features = feature_cols + list(env)
+    all_features = feature_cols + list(env) + list(macro)
     # Prevent tree splits from learning floating-point cancellation artifacts.
     panel[all_features] = panel[all_features].round(8)
     return panel, feature_cols, all_features
 
 
-def input_hashes(market_path=MARKET_PATH, environment_path=ENVIRONMENT_PATH):
+def input_hashes(market_path=MARKET_PATH, environment_path=ENVIRONMENT_PATH, macro_path=MACRO_PATH):
     return {name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
-            for name,path in [('market', market_path), ('environment', environment_path)]}
+            for name,path in [('market', market_path), ('environment', environment_path), ('macro', macro_path)]}

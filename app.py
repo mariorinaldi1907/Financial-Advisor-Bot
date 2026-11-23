@@ -34,6 +34,8 @@ st.html("""
 .outlook-icon { display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; border-radius: 50%; background: #ffffffb3; font-size: 1.4rem; color: var(--accent); }
 .outlook-card h3 { color: var(--accent); font-size: 1.6rem; margin: 0; padding: 0; }
 .outlook-card p { color: #34465c; margin: 6px 0 0; line-height: 1.6; }
+.takeaway { margin-top: 18px; padding-top: 16px; border-top: 1px solid #172b4326; }
+.takeaway strong { display: block; font-size: 1.2rem; color: #172b43; margin-top: 4px; }
 .outlook-card .outlook-lead { color: #172b43; font-weight: 650; }
 .mini-label { color: #61728a; font-size: .78rem; font-weight: 650; margin: 0 0 5px; }
 .direction { font-size: 1.4rem; font-weight: 650; color: #183d65; margin: 0 0 2px; }
@@ -96,6 +98,8 @@ if mode == 'Past forecasts':
     forecast = dict(as_of=stored.Date.date().isoformat(), p_up=float(stored.p_up),
         expected_return=float(stored.expected_return), lower_return=float(stored.lower_return),
         upper_return=float(stored.upper_return), median_return=float(stored.median_return))
+    if 'downside_p' in stored:
+        forecast.update(downside_p=float(stored.downside_p), downside_threshold=float(stored.downside_threshold))
     st.info('You are exploring a past forecast. The reliability explanation uses the tests completed so far.')
 
 as_of = pd.Timestamp(forecast['as_of']).date()
@@ -106,8 +110,10 @@ st.caption(f"{TIMEFRAMES[horizon]} · Saved market data: {as_of.strftime('%d %b 
 symbol = {'Uncertain': '≈', 'Positive': '↗', 'Negative': '↘'}[summary['label']]
 st.html(f"""<section class="outlook-card {summary['tone']}" aria-label="Market outlook">
 <div class="outlook-top"><span class="outlook-icon" aria-hidden="true">{symbol}</span><h3>{escape(summary['label'])}</h3></div>
-<p class="outlook-lead">{escape(summary['meaning'])}</p><p>{escape(summary['reason'])}</p></section>""")
-st.caption('Positive describes the model’s price outlook. It does not mean “buy”. The app does not know your savings, debts or goals.')
+<p class="outlook-lead">{escape(summary['meaning'])}</p><p>{escape(summary['reason'])}</p>
+<div class="takeaway"><span class="mini-label">{'HOW TO READ THIS PAST RESULT' if mode == 'Past forecasts' else 'WHAT THIS MEANS'}</span>
+<strong>{escape(summary['takeaway'])}</strong><p>{escape(summary['next_step'])}</p></div></section>""")
+st.caption('A model-based research takeaway, not a personal instruction to buy, hold or sell. The app does not know your savings, debts or goals.')
 
 left,right = st.columns([1.6,1], gap='large')
 with left, st.container(key='price-card'):
@@ -149,6 +155,14 @@ with right, st.container(key='forecast-card'):
         yaxis=dict(visible=False,range=[-1,1],fixedrange=True))
     st.plotly_chart(range_chart,width='stretch',config={'displayModeBar':False},theme=None)
     st.caption('Dotted line = no price change. Actual prices can move outside the blue range.')
+    if 'downside_p' in forecast:
+        st.divider()
+        st.html(f'<p class="mini-label">LARGER-LOSS ESTIMATE</p><p class="range-value">{forecast["downside_p"]:.0%} estimated probability</p>')
+        st.caption(f'A price fall greater than {abs(forecast["downside_threshold"]):.1%} over this timeframe. The threshold adjusts to recent volatility.')
+        if result.get('downside', {}).get('selected_model') == 'prior':
+            st.caption('Based on historical frequency. No more complex risk model passed the validation checks.')
+        st.caption('This estimate can be wrong. See past risk performance in the optional research results.')
+
 
 with st.expander('How reliable has it been?', expanded=True):
     a,b = st.columns(2)
@@ -169,7 +183,8 @@ if mode == 'Past forecasts':
 with st.expander('A few simple terms'):
     st.write('**Positive:** the model leans toward a rise, with supporting evidence from its tests.')
     st.write('**Negative:** the model leans toward a fall, with supporting evidence from its tests.')
-    st.write('**Uncertain:** the direction is unclear, the evidence is weak, or the data is old.')
+    st.write('**Uncertain → Wait / review:** the direction is unclear, the evidence is weak, or the data is old. This is not an automatic hold or sell signal.')
+    st.write('**Consider buying / reducing:** research prompts shown only when the outlook meets the evidence checks. They do not assess whether a trade suits you.')
     st.write('**Possible movement:** a range of estimated changes. It can include both a gain and a loss.')
 
 with st.expander('Detailed research results (optional)'):
@@ -190,5 +205,21 @@ with st.expander('Detailed research results (optional)'):
     st.write(f"Exploratory date-block interval for model-minus-prior log loss: [{lo:+.4f}, {hi:+.4f}].")
     st.caption('Outlook labels require a model-favoring interval, lower per-asset log loss, balanced accuracy above 50%, and an estimated UP probability of at least 60% or at most 40%. These are display rules, not an optimized trading strategy. Historical tests reuse previously inspected periods, outcomes overlap, and vendor data is not original-release vintage data.')
     st.write(f"Observed range coverage: {metrics['interval_80_coverage']:.1%}. Nominal 80% coverage is not guaranteed.")
+    if 'promotion' in result:
+        st.write('**Model selection checks**')
+        st.caption('A candidate needs at least two validation-fold wins, average log-loss improvement of 0.0005, and no fold deterioration greater than 0.002. Otherwise the historical baseline is used. Evaluation results do not select the model.')
+        st.dataframe(pd.DataFrame(result['promotion']).T, width='stretch')
+    if 'downside' in result:
+        risk_metrics = result['downside']['metrics'][ticker]
+        risk_baseline = result['downside']['baseline_metrics'][ticker]
+        st.write(f"**Larger-loss model:** {result['downside']['selected_model']}. Out-of-sample Brier score {risk_metrics['brier']:.4f}; historical baseline {risk_baseline['brier']:.4f}. Lower is better.")
+    forward = report.get('forward_evaluation')
+    if forward:
+        st.write('**Forward forecasts**')
+        st.write(f"Scored: {forward['status_counts'].get('evaluated',0)} · Pending: {forward['status_counts'].get('pending',0)}")
+        st.caption(forward['note'])
+        if forward['groups']:
+            st.json(forward['groups'], expanded=False)
+
     st.download_button('Download research predictions', predictions_path.read_bytes(), 'research_predictions.csv', 'text/csv')
 st.html('<footer class="footer">Market Outlook &nbsp;·&nbsp; Learning demo &nbsp;·&nbsp; Saved forecasts &nbsp;·&nbsp; No personal financial assessment</footer>')

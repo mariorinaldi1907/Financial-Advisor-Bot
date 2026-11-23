@@ -1,6 +1,6 @@
 # Financial Advisor Bot — Market Research
 
-A reproducible forecasting system for **22 ETFs**, with **1-, 5-, 10-, and 20-session horizons**. Shared models learn from technical features, cross-asset relationships, and delayed volatility/Treasury-index context. The beginner-friendly dashboard starts with a **Positive / Uncertain / Negative** outlook, plain explanations, price history, and past forecast accuracy. Detailed research results remain available in an optional section. An outlook describes the model’s evidence, not whether an investment suits someone.
+A reproducible market-outlook and downside-risk system for **22 ETFs**, with **1-, 5-, 10-, and 20-session horizons**. Shared models learn from technical features, cross-asset relationships, and delayed volatility/Treasury-index context. The beginner-friendly dashboard starts with a **Positive / Uncertain / Negative** outlook, plain explanations, price history, and past forecast accuracy. Detailed research results remain available in an optional section. Each outlook includes a plain-language research takeaway: **Consider buying**, **Wait / review**, or **Consider reducing**. Weak evidence always produces Wait / review; uncertainty is not an automatic hold instruction. These prompts do not assess whether an investment suits someone.
 
 **Status:** research software. Temporal safeguards and richer models do not guarantee an investment edge. The current results do not establish consistent out-of-sample superiority over simple priors.
 
@@ -32,6 +32,9 @@ python -m src.research
 # Retrain one horizon. Existing forecasts are preserved in the issue ledger.
 python -m src.research --horizons 20
 
+# Refresh the free Philadelphia Fed monthly economic vintages.
+python -m src.macro
+
 # Refresh market/environment snapshots and retrain all horizons.
 python -m src.universe --download --start 2007-01-01
 
@@ -48,7 +51,7 @@ Snapshots are checked for duplicate and missing ETF sessions and adequate covera
 
 ## Deploy a free website
 
-Streamlit Community Cloud can serve the existing Python app directly from GitHub. Choose the repository, select the branch containing these changes (`codex/purged-walk-forward-review` until merged), and set the main file to `app.py`. Select Python 3.13 in advanced settings. No API keys or paid model service are required. Share the actual `streamlit.app` URL after the deployment succeeds.
+Streamlit Community Cloud can serve the existing Python app directly from GitHub. Choose the repository, select the branch containing these changes (`market-outlook-improvements` until merged), and set the main file to `app.py`. Select Python 3.13 in advanced settings. No API keys or paid model service are required. Share the actual `streamlit.app` URL after the deployment succeeds.
 
 The website reads saved public market snapshots; it does not train models or download fresh data at startup. Refresh and train separately, validate the results, then commit a complete matching snapshot. The saved date is shown prominently, and old data produces an Uncertain outlook.
 
@@ -98,7 +101,7 @@ The refactored training script is [`src/research.py`](src/research.py); causal f
 
 Earlier scored outcomes may enter a later refit once they are known, as in a real walk-forward process. This does not make successive folds independent. Post-validation embargoes supplement outcome purging; they do not eliminate all financial dependence.
 
-Validation nominal periods are 2018–2019, 2020–2021, and 2022–2023. Subsequent starts move forward to respect embargoes. Selection uses mean asset-level validation log loss across the three periods. The 2024, 2025, and 2026 evaluation blocks refit annually using only earlier mature outcomes. Evaluation scores never choose the candidate.
+Validation nominal periods are 2018–2019, 2020–2021, and 2022–2023. Subsequent starts move forward to respect embargoes. A candidate is eligible only if it beats the per-asset historical prior in at least two validation periods, improves average asset-mean log loss by at least 0.0005, and worsens no fold by more than 0.002. The eligible candidate with the lowest mean loss is selected; otherwise the prior is used. These fixed research guardrails do not guarantee statistical significance or future performance. The same independent gate is used for the downside head. The 2024, 2025, and 2026 evaluation blocks refit annually using only earlier mature outcomes. Evaluation scores never choose the candidate.
 
 ### Features and model families
 
@@ -114,15 +117,21 @@ Compared families:
 - Histogram gradient boosting: 15 leaves, minimum 100 observations per leaf, L2 penalty 20, 160 iterations, no random early-stopping split.
 - Fixed equal-weight ensemble and a version blended equally with the prior.
 
+Feature-group experiments compare the same L2 logistic estimator on a compact core (returns, momentum, volatility, drawdown, relative volume, asset IDs and matured historical frequencies), then add credit, breadth, economic vintages, or delayed environment inputs separately. A compact CatBoost is also compared. The report saves the exact columns, validation folds, and promotion decision for every candidate. This tests redundancy without selecting features using evaluation outcomes.
+
+The credit inputs are HYG/LQD relative-return and historical Z-score proxies, not actual credit spreads. Breadth measures the fixed nine-sector ETF universe; it is not a survivorship-free index of all stocks.
+
+A separate calibrated logistic head estimates a loss exceeding one current trailing-volatility unit over the chosen horizon. The threshold is fixed from information available on the forecast date (`20-session volatility × sqrt(horizon)`). This compares larger losses consistently across assets, but it is not the probability of any loss or a 5% loss. Per-asset prior tail-event frequencies form the downside baseline. Brier/log-loss scores are saved per evaluation period; return intervals continue to describe potential severity.
+
 Non-baseline probability estimates receive sigmoid calibration using the separate historical calibration slice. A Ridge model estimates volatility-normalized expected return. A regularized CatBoost quantile model predicts the 10th/50th/90th percentiles; per-asset historical calibration widens the interval. Dependence and changing distributions mean nominal 80% coverage is not guaranteed.
 
 ## Data and scope
 
 Targets: SPY, QQQ, IWM, VEU, AGG, TLT, GLD, XLF, XLK, XLE, XLV, XLI, XLU, XLP, XLY, XLB, EEM, EFA, HYG, LQD, IEF, and DBC. UUP supplies additional dollar context.
 
-The saved Yahoo snapshot covers 2007–20 November 2026, subject to inception dates. ETF OHLC is dividend/split-adjusted. Environment inputs are Yahoo's VIX and 13-week/5-year/10-year/30-year Treasury-yield indices **as reported**. They are market-environment proxies, not direct inflation/employment releases. The public FRED download was unavailable during this run; no substitute economic values were fabricated.
+The saved Yahoo snapshot covers 2007–20 November 2026, subject to inception dates. ETF OHLC is dividend/split-adjusted. Environment inputs are Yahoo's VIX and 13-week/5-year/10-year/30-year Treasury-yield indices **as reported**. They are market-environment proxies, not direct inflation/employment releases. Inflation and payroll employment context comes from the Philadelphia Fed’s [monthly historical CPI vintages](https://www.philadelphiafed.org/surveys-and-data/real-time-data-research/pcpi) and [employment vintages](https://www.philadelphiafed.org/surveys-and-data/real-time-data-research/employ). For each vintage, monthly and annual growth are computed entirely within that vintage. No latest-revised column is substituted. A vintage enters the model only on the first calendar day after its month ends; values expire after 62 days without an update. This intentionally sacrifices release-day responsiveness for conservative timing. The compact CSV records observation date, vintage month, availability date, source URL and original workbook SHA-256. Refreshing data never occurs in a website request.
 
-No paid feed, historical news archive, original economic-release vintages, brokerage execution, or cloud GPU service is included. Yahoo history can be revised. Strict point-in-time guarantees require point-in-time source data, even when feature timing is correct.
+No paid feed, historical news archive, exact release-time/consensus-surprise feed, brokerage execution, or cloud GPU service is included. Yahoo history can be revised. Strict point-in-time guarantees require point-in-time source data, even when feature timing is correct.
 
 ## Included results
 
@@ -130,12 +139,12 @@ Equal-weight averages across 22 ETFs, using the embargoed 2024–2026 evaluation
 
 | Horizon | Selected model | Accuracy | Balanced accuracy | Prior accuracy |
 | --- | --- | ---: | ---: | ---: |
-| 1 sessions | shrink_ensemble | 52.95% | 49.91% | 52.93% |
-| 5 sessions | shrink_ensemble | 55.25% | 49.63% | 55.77% |
-| 10 sessions | cat_context | 55.75% | 49.96% | 57.05% |
-| 20 sessions | hist_context | 55.38% | 48.49% | 60.08% |
+| 1 session | logistic_credit | 53.13% | 50.06% | 52.93% |
+| 5 sessions | shrink_ensemble | 55.08% | 49.53% | 55.77% |
+| 10 sessions | shrink_ensemble | 55.70% | 49.12% | 57.05% |
+| 20 sessions | shrink_ensemble | 59.71% | 49.14% | 60.08% |
 
-The selected models do not consistently outperform the priors. These results quantify the current limitation; richer inputs and more complex estimators are not assumed to improve accuracy. Expected-return forecasts are also compared against a zero-return forecast, and interval coverage is reported rather than assumed.
+The selected models still do not beat the priors on average probability quality at any horizon. The downside head falls back to historical tail-event frequencies at all four horizons because the fitted alternative did not pass validation. The website labels that estimate accordingly. Balanced accuracy is unavailable for a risk evaluation slice containing only one observed class. The selected models do not consistently outperform the priors. These results quantify the current limitation; richer inputs and more complex estimators are not assumed to improve accuracy. Expected-return forecasts are also compared against a zero-return forecast, and interval coverage is reported rather than assumed.
 
 Read `data/research_results.json` for every validation fold, annual evaluation, asset, candidate, calibration diagnostic, confidence-interval calculation, and model-selection decision. The dashboard exposes annual regime stability directly. `data/research_predictions.csv` contains the saved evaluation predictions and fitting-outcome cutoffs.
 
@@ -149,7 +158,7 @@ Drawdown is measured at holding-period endpoints; intraperiod drawdowns are not 
 
 ### Forward evidence
 
-`data/forecast_ledger.csv` preserves the first forecast issued for each asset/date/horizon/model version, including versions issued before later refits. New entries record the exact model-file SHA-256; older unversioned entries are identified explicitly. Retraining does not rewrite those probabilities. `src.forward` scores a forecast only after its future market session exists and rejects issue timestamps outside the interval between its as-of close and the next session's open. All current entries are pending at issue time. Forecast evidence is kept distinct from retrospective simulations.
+`data/forecast_ledger.csv` preserves the first forecast issued for each asset/date/horizon/model version, including versions issued before later refits. New entries record the exact model-file SHA-256; older unversioned entries are identified explicitly. Retraining does not rewrite those probabilities. `src.forward` scores a forecast only after its future market session exists and rejects issue timestamps outside the interval between its as-of close and the next session's open. Forward summaries exclude pending and ineligible issues, retain model versions separately, and report direction accuracy, Brier/log-loss scores against paired baseline forecasts, interval coverage, and downside scores when fields exist. Older issues without those fields are not silently assigned new baseline or risk forecasts. Forecast evidence is kept distinct from retrospective simulations. Run `python -m src.forward` after updating market observations; this cannot manufacture future evidence.
 
 ## Files
 
@@ -161,9 +170,11 @@ src/train.py                   Portable model primitives and training alias
 src/universe.py                Validated downloads and training entry point
 src/forward.py                 Resolution of genuinely issued forecasts
 src/features.py                Technical indicator primitives
+src/macro.py                   Free monthly economic vintage refresh and normalization
 tests/                         Leakage, preprocessing, timing, artifact, and UI checks
 data/market_prices.csv         One shared ETF snapshot
 data/environment.csv           One environment snapshot
+data/macro_vintages.csv        Compact historical inflation/employment vintages
 data/research_results.json     Per-fold/per-period evidence and configuration
 data/research_predictions.csv  Saved evaluation predictions
 data/forecast_ledger.csv       Issued forecasts and eventual observed outcomes

@@ -27,7 +27,7 @@ def validate_snapshot(root=ROOT):
     root = Path(root)
     data = root / 'data'
     report = json.loads((data / 'research_results.json').read_text())
-    for key,name in [('market','market_prices.csv'),('environment','environment.csv')]:
+    for key,name in [('market','market_prices.csv'),('environment','environment.csv'),('macro','macro_vintages.csv')]:
         digest = hashlib.sha256((data / name).read_bytes()).hexdigest()
         if report['input_hashes'].get(key) != digest:
             raise ValueError(f'The {key} snapshot does not match the saved forecasts.')
@@ -47,6 +47,11 @@ def validate_snapshot(root=ROOT):
                 raise ValueError('A forecast has an invalid probability.')
             if not all(math.isfinite(row[c]) for c in ['lower_return','upper_return','expected_return']):
                 raise ValueError('A forecast has an invalid return estimate.')
+            for name in ['prior_p_up','downside_p','downside_prior_p']:
+                if not math.isfinite(row[name]) or not 0 <= row[name] <= 1:
+                    raise ValueError('A baseline or downside probability is invalid.')
+            if not math.isfinite(row['downside_threshold']) or row['downside_threshold'] >= 0:
+                raise ValueError('A downside threshold must be a finite negative return.')
             if row['lower_return'] > row['upper_return']:
                 raise ValueError('A forecast return range is reversed.')
     return report

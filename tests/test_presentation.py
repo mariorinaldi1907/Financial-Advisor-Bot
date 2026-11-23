@@ -12,6 +12,7 @@ class PresentationTests(unittest.TestCase):
         weak = {'bootstrap_95_interval':[-.01,.03]}
         result = outlook_summary(.95,self.metrics,weak)
         self.assertEqual(result['label'],'Uncertain')
+        self.assertEqual(result['takeaway'],'Wait / review')
         self.assertIn('does not give a clear reason to invest',result['meaning'])
 
     def test_positive_and_negative_describe_direction_only(self):
@@ -19,6 +20,8 @@ class PresentationTests(unittest.TestCase):
         negative = outlook_summary(.2,self.metrics,self.evidence)
         self.assertEqual(positive['label'],'Positive')
         self.assertEqual(negative['label'],'Negative')
+        self.assertEqual(positive['takeaway'],'Consider buying')
+        self.assertEqual(negative['takeaway'],'Consider reducing')
         self.assertIn('loss',positive['reason'].lower())
         self.assertIn('estimate',negative['reason'].lower())
 
