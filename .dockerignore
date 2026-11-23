@@ -1,0 +1,17 @@
+**
+!Dockerfile
+!requirements.txt
+!app.py
+!src/
+!src/__init__.py
+!src/context.py
+!src/data.py
+!src/features.py
+!src/presentation.py
+!src/serve.py
+!data/
+!data/market_prices.csv
+!data/environment.csv
+!data/research_results.json
+!data/research_predictions.csv
+!data/forecast_ledger.csv

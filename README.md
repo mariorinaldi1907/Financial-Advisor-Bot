@@ -1,12 +1,12 @@
 # Financial Advisor Bot — Market Research
 
-A reproducible forecasting system for **22 ETFs**, with **1-, 5-, 10-, and 20-session horizons**. Shared models learn from technical features, cross-asset relationships, and delayed volatility/Treasury-index context. The dashboard shows directional probabilities, expected returns, calibrated return ranges, and evaluation stability by year.
+A reproducible forecasting system for **22 ETFs**, with **1-, 5-, 10-, and 20-session horizons**. Shared models learn from technical features, cross-asset relationships, and delayed volatility/Treasury-index context. The beginner-friendly dashboard starts with a **Positive / Uncertain / Negative** outlook, plain explanations, price history, and past forecast accuracy. Detailed research results remain available in an optional section. An outlook describes the model’s evidence, not whether an investment suits someone.
 
 **Status:** research software. Temporal safeguards and richer models do not guarantee an investment edge. The current results do not establish consistent out-of-sample superiority over simple priors.
 
 ## Run
 
-Python 3.12+; tested locally with Python 3.14.
+Python 3.12+; the Docker image uses Python 3.13 and the full research checks use Python 3.14.
 
 ```bash
 git clone https://github.com/mariorinaldi1907/Financial-Advisor-Bot.git
@@ -21,7 +21,11 @@ Windows activation: `.venv\Scripts\activate`. The app uses the committed snapsho
 
 ## Train, refresh, and track future forecasts
 
+Training dependencies are separate from the lightweight website dependencies. Install them before training or running the full test suite.
+
 ```bash
+python -m pip install -r requirements-train.txt
+
 # Full offline research run, including chronological validation and evaluation.
 python -m src.research
 
@@ -41,6 +45,27 @@ python -m unittest discover -s tests -v
 `python -m src.train` is an alias for the current full training run. `python -m src.download` refreshes data only. Downloads default to an exclusive end date of today in New York, excluding an incomplete current session. `--end YYYY-MM-DD` makes the cutoff explicit.
 
 Snapshots are checked for duplicate and missing ETF sessions and adequate coverage. Models/report hashes must match the snapshots; the app rejects stale combinations. After refreshing, retrain all horizons before relying on the dashboard. Avoid running the app while training updates its files.
+
+## Deploy a free website
+
+Streamlit Community Cloud can serve the existing Python app directly from GitHub. Choose the repository, select the branch containing these changes (`codex/purged-walk-forward-review` until merged), and set the main file to `app.py`. Select Python 3.13 in advanced settings. No API keys or paid model service are required. Share the actual `streamlit.app` URL after the deployment succeeds.
+
+The website reads saved public market snapshots; it does not train models or download fresh data at startup. Refresh and train separately, validate the results, then commit a complete matching snapshot. The saved date is shown prominently, and old data produces an Uncertain outlook.
+
+## Run with Docker
+
+With Docker installed:
+
+```bash
+docker compose up --build -d
+# Open http://localhost:8501
+# Stop the demo when finished:
+docker compose down
+```
+
+If port 8501 is already occupied, use `APP_PORT=8502 docker compose up --build -d` and open port 8502. The compose configuration binds to the local computer; use a hosting provider’s HTTPS routing for a public deployment.
+
+The image includes only website dependencies and public snapshots, runs as an unprivileged user, and checks snapshot consistency before startup. It supports a host-provided `PORT` and includes an HTTP health check. Compose runs with a read-only filesystem and temporary scratch space. GitHub Actions builds the image, renders the app using its website dependencies, and checks HTTP startup. Model weights, credentials, local environments, and training code are excluded from the image.
 
 ## Review findings and implemented safeguards
 

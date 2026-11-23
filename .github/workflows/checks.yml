@@ -11,5 +11,29 @@ jobs:
         with:
           python-version: '3.14'
           cache: pip
-      - run: python -m pip install -r requirements.txt
+      - run: python -m pip install -r requirements-train.txt
       - run: python -m unittest discover -s tests -v
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t market-outlook:check .
+      - name: Render the app with web dependencies only
+        run: >-
+          docker run --rm --read-only --tmpfs /tmp:rw,size=128m
+          --entrypoint python market-outlook:check -c
+          "from streamlit.testing.v1 import AppTest; app = AppTest.from_file('/app/app.py', default_timeout=40).run(); assert not app.exception, app.exception"
+      - name: Check HTTP startup and container health
+        shell: bash
+        run: |
+          docker run -d --name market-outlook-check --read-only --tmpfs /tmp:rw,size=128m -p 127.0.0.1:18501:8501 market-outlook:check
+          trap 'docker logs market-outlook-check; docker rm -f market-outlook-check' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18501/_stcore/health; then
+              docker exec market-outlook-check python -m src.serve --healthcheck
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
