@@ -68,7 +68,7 @@ def benchmark(tickers, device='cpu'):
         valid = frame.loc[frame.index >= BENCHMARK_START].dropna(subset=['Target'])
         dates = list(valid.index)  # all daily as-of dates; dependence is reported explicitly
         all_frames[ticker], all_dates[ticker] = frame, dates
-        source_hashes[ticker] = raw_digest(raw)
+        source_hashes[ticker] = raw_digest(ticker)
         latest[ticker] = {}
     configs = [('chronos_bolt_tiny', 'amazon/chronos-bolt-tiny', False),
                ('chronos2_price', 'amazon/chronos-2', False),

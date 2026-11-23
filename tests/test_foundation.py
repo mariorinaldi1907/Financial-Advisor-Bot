@@ -62,7 +62,7 @@ class FoundationTests(unittest.TestCase):
         self.assertTrue(records.p_up.between(.099999, .900001).all())
         for ticker in report['metrics']:
             raw, _ = load_market(ticker)
-            self.assertEqual(report['source_hashes'][ticker], raw_digest(raw))
+            self.assertEqual(report['source_hashes'][ticker], raw_digest(ticker))
             future = raw.Close.shift(-10)
             labels = (future > raw.Close).astype(int)
             for model, group in records.loc[records.ticker == ticker].groupby('model'):
@@ -70,3 +70,20 @@ class FoundationTests(unittest.TestCase):
                 self.assertEqual(len(group), report['metrics'][ticker][model]['windows'])
                 self.assertTrue((group.Date >= pd.Timestamp(BENCHMARK_START)).all())
                 self.assertEqual(report['latest'][ticker][model]['as_of'], str(raw.index.max().date()))
+
+    def test_source_hash_uses_csv_records_and_normalizes_line_endings(self):
+        import tempfile
+        from src.data import raw_digest
+        text = ('Date,Ticker,Close,High,Low,Open,Volume\n'
+                '2020-01-01,SPY,100.123456789012345,101,99,100,1000\n'
+                '2020-01-01,GLD,150,151,149,150,2000\n')
+        with tempfile.NamedTemporaryFile(suffix='.csv') as temporary:
+            path = Path(temporary.name)
+            path.write_bytes(text.encode())
+            original = raw_digest('SPY', path)
+            path.write_bytes(text.replace('\n', '\r\n').encode())
+            self.assertEqual(original, raw_digest('SPY', path))
+            path.write_text(text.replace('GLD,150', 'GLD,155'))
+            self.assertEqual(original, raw_digest('SPY', path))
+            path.write_text(text.replace('100.123456789012345', '100.123456789012346'))
+            self.assertNotEqual(original, raw_digest('SPY', path))

@@ -20,7 +20,7 @@ class DashboardTests(unittest.TestCase):
                 raw, _ = load_market(ticker)
                 self.assertEqual(meta['ticker'], ticker)
                 self.assertEqual(meta['snapshot_sha256'], snapshot_digest())
-                self.assertEqual(meta['raw_sha256'], raw_digest(raw))
+                self.assertEqual(meta['raw_sha256'], raw_digest(ticker))
                 self.assertLess(meta['development_label_end'], meta['holdout_start'])
                 for candidate in meta['validation'].values():
                     for fold in candidate['folds']:

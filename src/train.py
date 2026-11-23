@@ -99,7 +99,7 @@ def train(ticker='SPY', output=ROOT, prices_path=MARKET_PATH):
     metadata = dict(schema_version=1, created_utc=datetime.now(timezone.utc).isoformat(),
                     ticker=ticker, horizon=HORIZON, selected_model=winner, features=cols,
                     selection_metric='mean development-fold log loss (lower is better)',
-                    sklearn_version=sklearn.__version__, raw_sha256=raw_digest(raw), snapshot_sha256=snapshot_digest(prices_path),
+                    sklearn_version=sklearn.__version__, raw_sha256=raw_digest(ticker, prices_path), snapshot_sha256=snapshot_digest(prices_path),
                     raw_start=str(raw.index.min().date()), raw_end=str(raw.index.max().date()),
                     raw_rows=len(raw), labeled_rows=len(labeled),
                     context_sha256=snapshot_digest(prices_path),

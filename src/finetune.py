@@ -43,7 +43,7 @@ def finetune():
         inputs.append({'target': frame.Close.to_numpy(dtype=np.float32),
                        'past_covariates': {c: frame[c].to_numpy(dtype=np.float32) for c in columns}})
         evidence[ticker] = dict(rows=len(frame), start=str(frame.index.min().date()),
-                                end=str(frame.index.max().date()), raw_sha256=raw_digest(raw))
+                                end=str(frame.index.max().date()), raw_sha256=raw_digest(ticker))
     with tempfile.TemporaryDirectory(prefix='etf-finetune-') as temporary:
         pipeline.fit(inputs, prediction_length=HORIZON, finetune_mode='lora',
             context_length=CONTEXT_LENGTH, learning_rate=1e-5, num_steps=STEPS,
